@@ -45,6 +45,7 @@ export function SettingsPage() {
         tutorPersonality: settings.tutorPersonality,
         dailyGoalMinutes: settings.dailyGoalMinutes,
         learningGoal: settings.learningGoal,
+        showEnglishUnderReplies: settings.showEnglishUnderReplies,
       });
       setSettings(data.settings);
       if (accessToken && authUser) {
@@ -79,6 +80,32 @@ export function SettingsPage() {
 
       {settings && (
         <div className="mt-6 space-y-4">
+          <div className="rounded-2xl border border-sea/30 bg-sea/5 p-4">
+            <p className="text-sm font-semibold text-ink">Chat display</p>
+            <label className="mt-3 flex cursor-pointer items-start gap-3">
+              <input
+                type="checkbox"
+                className="mt-1 h-4 w-4 accent-sea"
+                checked={Boolean(settings.showEnglishUnderReplies)}
+                onChange={(e) =>
+                  setSettings({
+                    ...settings,
+                    showEnglishUnderReplies: e.target.checked,
+                  })
+                }
+              />
+              <span>
+                <span className="block font-medium text-ink">
+                  Show English under Polly’s replies
+                </span>
+                <span className="mt-0.5 block text-xs text-ink-soft">
+                  When enabled, replies show native script, romanization (when needed), then
+                  an English translation underneath.
+                </span>
+              </span>
+            </label>
+          </div>
+
           <label className="block text-sm">
             <span className="mb-1 block text-ink-soft">Display name</span>
             <input

@@ -3,6 +3,7 @@ import { NON_LATIN_LANGUAGES, type SupportedLanguage } from "../constants/langua
 export type ScriptBlock = {
   native: string;
   romanization: string;
+  english?: string;
 };
 
 function hasNativeScript(language: SupportedLanguage, text: string): boolean {
@@ -24,7 +25,7 @@ function hasNativeScript(language: SupportedLanguage, text: string): boolean {
 
 /** Common romanization particles / endings — not English prose. */
 const ROMAJI_MARKERS =
-  /\b(wa|ga|wo|o|ni|de|to|mo|ka|yo|ne|desu|masu|mashita|masen|kudasai|san|chan|kun|watashi|anata|ore|boku|hai|iie|konnichiwa|arigatou|sumimasen|kore|sore|are|doko|nani|dare|itsu|dou|genki|kimashita|sunde|imasu|porī|pori|polli|buli|poli)\b/i;
+  /\b(wa|ga|wo|o|ni|de|to|mo|ka|yo|ne|desu|masu|mashita|masen|kudasai|san|chan|kun|watashi|anata|ore|boku|hai|iie|konnichiwa|arigatou|sumimasen|kore|sore|are|doko|nani|dare|itsu|dou|genki|kimashita|sunde|imasu|porī|pori|polli|buli|poli|main|aap|hoon|se|hai|kahan|shahar|bharat|namaskar|mera|naam)\b/i;
 
 function looksLikeRomanization(text: string): boolean {
   const trimmed = text.trim();
@@ -36,41 +37,38 @@ function looksLikeRomanization(text: string): boolean {
     return false;
   }
   if (hasNativeScript("Hindi", trimmed)) return false;
+  // English gloss must not be treated as romanization
+  if (looksLikeEnglishLine(trimmed)) return false;
 
   const latin = (trimmed.match(/[A-Za-zÀ-ÿĀ-žāīūēōĀĪŪĒŌ]/g) || []).length;
   if (latin / Math.max(trimmed.length, 1) < 0.4) return false;
 
-  // Prefer treating Latin lines as romanization when they look like learner/tutor readings
   if (ROMAJI_MARKERS.test(trimmed)) return true;
   if (/[āīūēōĀĪŪĒŌ]/.test(trimmed)) return true;
-  // Short latin lines under a native line are almost always romaji
   if (trimmed.split(/\s+/).length <= 12) return true;
   return latin / Math.max(trimmed.length, 1) > 0.55;
 }
 
-/** True English meta lines to drop (not romanization). Never drop romaji. */
-function looksLikeEnglishMeta(text: string): boolean {
-  const trimmed = text.trim();
+function looksLikeEnglishLine(text: string): boolean {
+  const trimmed = text.trim().replace(/^English\s*:\s*/i, "");
   if (!trimmed) return false;
-  // Romanization always wins over English-meta heuristics
-  if (looksLikeRomanization(trimmed)) return false;
-  if (ROMAJI_MARKERS.test(trimmed)) return false;
+  if (ROMAJI_MARKERS.test(trimmed) && trimmed.split(/\s+/).length <= 8) return false;
   if (/[āīūēō]/.test(trimmed)) return false;
-
-  // Explicit English-only tutor meta (not typical romaji word order)
-  if (
-    /^(where are you|what do you|how are you|who are you|when did|why did|i'm |i am |do you |are you |nice to meet|we are working|let's |english translation)\b/i.test(
-      trimmed,
-    )
-  ) {
-    return true;
+  if (hasNativeScript("Japanese", trimmed) || hasNativeScript("Chinese", trimmed)) {
+    return false;
   }
+  if (hasNativeScript("Korean", trimmed) || hasNativeScript("Arabic", trimmed)) {
+    return false;
+  }
+  if (hasNativeScript("Hindi", trimmed)) return false;
 
-  // Long English-looking sentences without romaji markers
   return (
-    /^[A-Za-z][A-Za-z0-9 ,'’?.!-]*[.?!]?$/.test(trimmed) &&
-    trimmed.split(/\s+/).length >= 10 &&
-    !ROMAJI_MARKERS.test(trimmed)
+    /^(i |i'm |i am |you |we |they |he |she |it |this |that |what |where |which |how |who |when |why |do |does |did |are |is |am |from |the |a |an )/i.test(
+      trimmed,
+    ) ||
+    (/^[A-Za-z][A-Za-z0-9 ,'’?.!-]*[.?!]?$/.test(trimmed) &&
+      trimmed.split(/\s+/).length >= 3 &&
+      !ROMAJI_MARKERS.test(trimmed))
   );
 }
 
@@ -85,10 +83,10 @@ function cleanLine(line: string): string {
     );
     return nativeHeavy ? parts.join("") : parts.join(" ");
   }
-  return line.trim();
+  return line.trim().replace(/^English\s*:\s*/i, "");
 }
 
-/** Sentence-level native + romanization blocks. */
+/** Sentence-level native + romanization (+ optional English) blocks. */
 export function buildScriptBlocks(
   content: string,
   language: SupportedLanguage,
@@ -98,8 +96,7 @@ export function buildScriptBlocks(
   const rawLines = content
     .split(/\r?\n/)
     .map((line) => cleanLine(line))
-    .filter(Boolean)
-    .filter((line) => !looksLikeEnglishMeta(line));
+    .filter(Boolean);
 
   const lines: string[] = [];
   for (const line of rawLines) {
@@ -121,21 +118,61 @@ export function buildScriptBlocks(
   for (let i = 0; i < lines.length; i += 1) {
     const line = lines[i]!;
     const next = lines[i + 1];
+    const third = lines[i + 2];
 
     if (hasNativeScript(language, line) && next && looksLikeRomanization(next)) {
-      blocks.push({ native: line, romanization: next });
-      i += 1;
+      const english =
+        third && looksLikeEnglishLine(third) ? third.replace(/^English\s*:\s*/i, "") : "";
+      blocks.push({
+        native: line,
+        romanization: next,
+        english,
+      });
+      i += english ? 2 : 1;
       continue;
     }
 
     if (hasNativeScript(language, line)) {
-      blocks.push({ native: line, romanization: "" });
+      const english =
+        next && looksLikeEnglishLine(next) ? next.replace(/^English\s*:\s*/i, "") : "";
+      blocks.push({
+        native: line,
+        romanization: "",
+        english,
+      });
+      if (english) i += 1;
     } else if (looksLikeRomanization(line)) {
       blocks.push({ native: "", romanization: line });
+    } else if (looksLikeEnglishLine(line)) {
+      blocks.push({
+        native: "",
+        romanization: "",
+        english: line.replace(/^English\s*:\s*/i, ""),
+      });
     }
   }
 
-  return blocks.filter((block) => block.native || block.romanization);
+  return blocks.filter(
+    (block) => block.native || block.romanization || block.english,
+  );
+}
+
+export function extractEnglishLines(
+  content: string,
+  language: SupportedLanguage,
+): string[] {
+  if (NON_LATIN_LANGUAGES.includes(language)) {
+    return buildScriptBlocks(content, language)
+      .map((block) => block.english?.trim() || "")
+      .filter(Boolean);
+  }
+
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => cleanLine(line))
+    .filter(Boolean);
+  // Prefer explicit trailing English-looking lines
+  return lines.filter((line) => looksLikeEnglishLine(line));
 }
 
 export function hasRomanizationLine(

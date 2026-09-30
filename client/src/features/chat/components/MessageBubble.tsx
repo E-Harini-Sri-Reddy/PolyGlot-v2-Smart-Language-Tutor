@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 import { BookmarkPlus, ChevronDown, RefreshCw, Volume2, X } from "lucide-react";
-import type { ChatMessage } from "../../../types";
+import type { ChatMessage, TutorCorrection } from "../../../types";
 import {
   SPEECH_LANG_MAP,
   type SupportedLanguage,
@@ -11,6 +11,7 @@ import { speakText } from "../../../utils/speech";
 import { saveWordFromContext } from "../../../services/dictionaryService";
 import {
   buildScriptBlocks,
+  extractEnglishLines,
   isNonLatinLanguage,
   nativeTextForSpeech,
 } from "../../../utils/nonLatinDisplay";
@@ -18,6 +19,129 @@ import {
 function renderMarkdown(text: string) {
   const html = marked.parse(text, { async: false }) as string;
   return DOMPurify.sanitize(html);
+}
+
+function looksLikeRawJsonBlob(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  return (
+    /^\s*\{[\s\S]*"\s*corrected\s*"\s*:/i.test(trimmed) ||
+    /^\s*\{[\s\S]*"\s*encourage\s*"\s*:/i.test(trimmed) ||
+    /^\s*\{[\s\S]*"\s*wordByWord\s*"\s*:/i.test(trimmed)
+  );
+}
+
+function extractQuotedField(text: string, field: string): string {
+  const re = new RegExp(
+    `"\\s*${field}\\s*"\\s*:\\s*"((?:\\\\.|[^"\\\\])*)"`,
+    "i",
+  );
+  const match = text.match(re);
+  if (!match?.[1]) return "";
+  return match[1]
+    .replace(/\\n/g, "\n")
+    .replace(/\\"/g, '"')
+    .replace(/\\\\/g, "\\")
+    .trim();
+}
+
+function extractWordByWordLoose(
+  text: string,
+): Array<{ word: string; meaning: string }> {
+  const block = text.match(/"\s*wordByWord\s*"\s*:\s*\[([\s\S]*?)\]/i);
+  if (!block?.[1]) return [];
+  const items: Array<{ word: string; meaning: string }> = [];
+  const objectRe =
+    /\{\s*"\s*word\s*"\s*:\s*"((?:\\.|[^"\\])*)"\s*,\s*"\s*meaning\s*"\s*:\s*"((?:\\.|[^"\\])*)"\s*\}/gi;
+  let match: RegExpExecArray | null;
+  while ((match = objectRe.exec(block[1])) !== null) {
+    const word = match[1]?.replace(/\\"/g, '"').trim() || "";
+    const meaning = match[2]?.replace(/\\"/g, '"').trim() || "";
+    if (word && meaning) items.push({ word, meaning });
+  }
+  return items;
+}
+
+function recoverCorrectionFromJsonBlob(
+  blob: string,
+): Partial<TutorCorrection> | null {
+  if (!looksLikeRawJsonBlob(blob)) return null;
+  let cleaned = blob.trim();
+  cleaned = cleaned.replace(/,\s*"\s+"/g, ',"');
+  cleaned = cleaned.replace(/"\s+([A-Za-z_][A-Za-z0-9_]*)"\s*:/g, '"$1":');
+  cleaned = cleaned.replace(/{\s*"\s+"/g, '{"');
+  cleaned = cleaned.replace(/,\s*([}\]])/g, "$1");
+
+  try {
+    const parsed = JSON.parse(cleaned) as TutorCorrection;
+    return {
+      encourage: parsed.encourage,
+      corrected: parsed.corrected,
+      translation: parsed.translation,
+      wordByWord: Array.isArray(parsed.wordByWord) ? parsed.wordByWord : [],
+      explain: parsed.explain,
+      why: parsed.why,
+    };
+  } catch {
+    return {
+      encourage: extractQuotedField(blob, "encourage"),
+      corrected: extractQuotedField(blob, "corrected"),
+      translation: extractQuotedField(blob, "translation"),
+      explain: extractQuotedField(blob, "explain"),
+      why: extractQuotedField(blob, "why"),
+      wordByWord: extractWordByWordLoose(blob),
+    };
+  }
+}
+
+/** Never show raw correction JSON in the card; recover fields when possible. */
+function sanitizeCorrectionForDisplay(
+  correction: TutorCorrection | null | undefined,
+): TutorCorrection | null {
+  if (!correction) return null;
+
+  const blobSource = [correction.explain, correction.why, correction.corrected]
+    .filter((part) => looksLikeRawJsonBlob(part || ""))
+    .join("\n");
+  const recovered = blobSource
+    ? recoverCorrectionFromJsonBlob(blobSource)
+    : null;
+
+  const explainRaw = recovered?.explain ?? correction.explain ?? "";
+  const whyRaw = recovered?.why ?? correction.why ?? "";
+  const explain = looksLikeRawJsonBlob(explainRaw) ? "" : explainRaw.trim();
+  const why = looksLikeRawJsonBlob(whyRaw) ? "" : whyRaw.trim();
+  const corrected = (
+    recovered?.corrected ||
+    correction.corrected ||
+    ""
+  ).trim();
+  const translation = (
+    recovered?.translation ||
+    correction.translation ||
+    ""
+  ).trim();
+  const wordByWord = (
+    recovered?.wordByWord?.length
+      ? recovered.wordByWord
+      : correction.wordByWord || []
+  ).filter((item) => item.word?.trim() && item.meaning?.trim());
+
+  if (!corrected && !explain && !why && wordByWord.length === 0 && !translation) {
+    return null;
+  }
+  return {
+    ...correction,
+    corrected,
+    translation,
+    wordByWord,
+    explain,
+    why: why || explain,
+    encourage:
+      recovered?.encourage?.trim() ||
+      correction.encourage?.trim() ||
+      "Great effort!",
+  };
 }
 
 type TextSegment = {
@@ -65,8 +189,9 @@ function tokenizeForSave(text: string, language: SupportedLanguage): TextSegment
 
 function buildKnownMeanings(message: ChatMessage) {
   const map = new Map<string, { meaning: string; pronunciation?: string }>();
-  const correction =
-    message.correction || message.metadata?.corrections?.[0] || null;
+  const correction = sanitizeCorrectionForDisplay(
+    message.correction || message.metadata?.corrections?.[0] || null,
+  );
 
   for (const item of correction?.wordByWord || []) {
     const key = item.word.trim().toLowerCase();
@@ -99,6 +224,7 @@ function ScriptDialogue({
   savingWord,
   knownMeanings,
   onWordClick,
+  showEnglish = false,
 }: {
   content: string;
   language: SupportedLanguage;
@@ -107,6 +233,7 @@ function ScriptDialogue({
   savingWord: string | null;
   knownMeanings: Map<string, { meaning: string; pronunciation?: string }>;
   onWordClick: (word: string) => void;
+  showEnglish?: boolean;
 }) {
   const blocks = useMemo(
     () => buildScriptBlocks(content, language),
@@ -166,6 +293,11 @@ function ScriptDialogue({
                 {block.romanization}
               </p>
             ) : null}
+            {showEnglish && block.english ? (
+              <p className="mt-1 text-sm leading-relaxed text-ink/80">
+                {block.english}
+              </p>
+            ) : null}
           </div>
         );
       })}
@@ -179,17 +311,18 @@ export function MessageBubble({
   streaming = false,
   onRegenerate,
   regenerating = false,
+  showEnglishUnderReplies = false,
 }: {
   message: ChatMessage;
   language: SupportedLanguage;
   streaming?: boolean;
   onRegenerate?: (messageId: string) => void;
   regenerating?: boolean;
+  showEnglishUnderReplies?: boolean;
 }) {
-  const correction =
-    message.correction ||
-    message.metadata?.corrections?.[0] ||
-    null;
+  const correction = sanitizeCorrectionForDisplay(
+    message.correction || message.metadata?.corrections?.[0] || null,
+  );
   const [open, setOpen] = useState(Boolean(correction));
 
   useEffect(() => {
@@ -361,6 +494,7 @@ export function MessageBubble({
               savingWord={savingWord}
               knownMeanings={knownMeanings}
               onWordClick={(word) => void handleWordClick(word)}
+              showEnglish={showEnglishUnderReplies}
             />
           </div>
         ) : pickMode && !isUser ? (
@@ -403,8 +537,41 @@ export function MessageBubble({
             className={`prose prose-sm max-w-none ${
               isUser ? "prose-invert" : "prose-slate"
             }`}
-            dangerouslySetInnerHTML={{ __html: html }}
-          />
+          >
+            {!isUser && showEnglishUnderReplies && !message.helpMode ? (
+              <div className="whitespace-pre-wrap text-sm leading-relaxed text-ink not-prose">
+                {(message.content || "")
+                  .split(/\r?\n/)
+                  .map((line) => line.trim())
+                  .filter(Boolean)
+                  .map((line, index, arr) => {
+                    const englishLines = extractEnglishLines(
+                      message.content || "",
+                      language,
+                    );
+                    const isEnglish =
+                      englishLines.includes(line) ||
+                      englishLines.includes(line.replace(/^English\s*:\s*/i, ""));
+                    return (
+                      <p
+                        key={`${index}-${line.slice(0, 12)}`}
+                        className={
+                          isEnglish
+                            ? "mt-1 text-ink/80"
+                            : index === arr.length - 1 && isEnglish
+                              ? "text-ink/80"
+                              : "text-ink"
+                        }
+                      >
+                        {line.replace(/^English\s*:\s*/i, "")}
+                      </p>
+                    );
+                  })}
+              </div>
+            ) : (
+              <div dangerouslySetInnerHTML={{ __html: html }} />
+            )}
+          </div>
         )}
 
         {!isUser && !streaming && Boolean(message.content?.trim()) && (

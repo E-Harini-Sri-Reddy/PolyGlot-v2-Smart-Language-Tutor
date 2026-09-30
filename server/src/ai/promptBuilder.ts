@@ -15,6 +15,7 @@ export type PromptBuildInput = {
   learnerName?: string;
   learnerPronouns?: string;
   memoryBlock?: string;
+  showEnglishUnderReplies?: boolean;
 };
 
 function difficultyRules(level: ProficiencyLevel): string {
@@ -132,6 +133,7 @@ export function buildSystemPrompt(input: PromptBuildInput): string {
     learnerName,
     learnerPronouns,
     memoryBlock,
+    showEnglishUnderReplies,
   } = input;
 
   const name = learnerName?.trim() || "Learner";
@@ -228,6 +230,8 @@ CORRECTION BLOCK FORMAT (only when needed — place AFTER dialogue):
 }
 <<<END>>>
 
+CRITICAL: The correction block MUST be valid JSON. Keys must be exactly encourage, corrected, translation, wordByWord, explain, why — no spaces inside key quotes (never write " corrected"). Do not show raw JSON to the learner outside this block.
+
 Do NOT put the correction block before the dialogue.
 
 ${
@@ -250,17 +254,34 @@ LANGUAGE RULES:
 - Dialogue must be primarily in ${language}.
 - Keep replies concise.
 - NEVER merely echo the learner's message.
-- Do NOT put English translations or English parentheses in the dialogue.
+${
+    showEnglishUnderReplies
+      ? `- English translation IS required on its own line after the ${language} text${
+          isNonLatin ? " (after romanization)" : ""
+        }.
+- Do NOT use labels like "English:" — just the plain translation sentence.`
+      : `- Do NOT put English translations or English parentheses in the dialogue.`
+  }
 ${
     isNonLatin
       ? `
 MANDATORY SCRIPT LAYOUT:
 - Native ${language} script on its own line.
 - Matching romanization on the NEXT line (full sentence, not word-by-word columns).
+${
+  showEnglishUnderReplies
+    ? `- Plain English translation on the NEXT line after romanization.`
+    : ""
+}
 - Do NOT use | separators.
 - Do NOT put native script and romanization on the same line.
 ${pronunciation}`
-      : ""
+      : showEnglishUnderReplies
+        ? `
+OUTPUT LAYOUT:
+Line 1: ${language} dialogue
+Line 2: plain English translation of that dialogue`
+        : ""
   }`;
 }
 

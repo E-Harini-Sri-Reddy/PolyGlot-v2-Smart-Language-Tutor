@@ -140,10 +140,20 @@ export const progressService = {
         quiz.completedAt &&
         quiz.completedAt >= weekStart,
     );
-    const minutes = conversationsThisWeek.reduce(
-      (sum, item) => sum + (item.durationSeconds || 0),
-      0,
-    );
+    const seconds = conversationsThisWeek.reduce((sum, item) => {
+      let duration = item.durationSeconds || 0;
+      if ((!duration || duration <= 0) && item.startedAt) {
+        const end = item.endedAt || new Date();
+        duration = Math.max(
+          0,
+          Math.floor((end.getTime() - item.startedAt.getTime()) / 1000),
+        );
+      }
+      return sum + duration;
+    }, 0);
+    // Count partial minutes so short practice still shows progress
+    const conversationMinutes =
+      seconds > 0 ? Math.max(1, Math.ceil(seconds / 60)) : 0;
     const grammarTopics = [
       ...new Set(summaries.flatMap((item) => item.grammarFocus || [])),
     ].slice(0, 5);
@@ -151,7 +161,7 @@ export const progressService = {
     return {
       weekStart,
       wordsLearned: wordsThisWeek.length,
-      conversationMinutes: Math.round(minutes / 60),
+      conversationMinutes,
       conversations: conversationsThisWeek.length,
       quizzesCompleted: quizzesThisWeek.length,
       improved: profile.strengths[0] || grammarTopics[0] || "Conversation fluency",

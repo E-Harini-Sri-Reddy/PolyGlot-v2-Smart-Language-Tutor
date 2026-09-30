@@ -29,7 +29,8 @@ THEN, if the learner's latest message has a clear mistake — wrong conjugation,
 Do NOT skip the correction block just to keep chatting.
 Do NOT correct Polly's own lines.
 Do NOT correct clear, acceptable greetings/introductions with no real error.
-When correcting, include encourage, corrected, translation, wordByWord, explain, and why.`;
+When correcting, include encourage, corrected, translation, wordByWord, explain, and why as valid JSON (exact key names, no spaces inside quotes around keys).
+Never put raw JSON into the dialogue text.`;
 
 function turnTakingNote(learnerName?: string, lastUserMessage?: string): string {
   const name = learnerName?.trim() || "the learner";
@@ -43,9 +44,25 @@ function turnTakingNote(learnerName?: string, lastUserMessage?: string): string 
 - You are Polly; address the learner as ${name}, never as Polly.`;
 }
 
-function scriptFormatNote(language: SupportedLanguage, learnerName?: string): string {
-  if (!NON_LATIN_LANGUAGES.includes(language)) return "";
+function scriptFormatNote(
+  language: SupportedLanguage,
+  learnerName?: string,
+  showEnglishUnderReplies?: boolean,
+): string {
+  if (!NON_LATIN_LANGUAGES.includes(language)) {
+    if (!showEnglishUnderReplies) return "";
+    const name = learnerName?.trim() || "the learner";
+    return `ENGLISH GLOSS (enabled): After the ${language} dialogue, add one plain English translation line.
+No labels like "English:". You are Polly; call the learner ${name}.`;
+  }
   const name = learnerName?.trim() || "the learner";
+  if (showEnglishUnderReplies) {
+    return `HARD REQUIREMENT for ${language}: ALWAYS output THREE lines —
+Line 1: native script
+Line 2: romanization for that exact text
+Line 3: plain English translation of that exact text
+Never omit romanization or English. No | separators. You are Polly; call the learner ${name}.`;
+  }
   return `HARD REQUIREMENT for ${language}: ALWAYS output TWO lines —
 Line 1: native script
 Line 2: romanization for that exact text
@@ -85,8 +102,42 @@ function hasRomanizationText(text: string): boolean {
     if (/[\u3040-\u9fff\uac00-\ud7af\u0600-\u06ff\u0900-\u097f]/.test(line)) {
       return false;
     }
+    if (looksLikeEnglishGloss(line)) return false;
     return /[A-Za-zÀ-ÿĀ-žāīūēō]/.test(line);
   });
+}
+
+function looksLikeEnglishGloss(text: string): boolean {
+  const trimmed = text.trim().replace(/^English\s*:\s*/i, "");
+  if (!trimmed) return false;
+  if (/[\u3040-\u9fff\uac00-\ud7af\u0600-\u06ff\u0900-\u097f]/.test(trimmed)) {
+    return false;
+  }
+  if (/[āīūēō]/.test(trimmed)) return false;
+  // Romaji/Hinglish markers — not English gloss
+  if (
+    /\b(wa|ga|desu|masu|watashi|kahan|hoon|aap|hai|se|main|namaskar|mera|naam|porī)\b/i.test(
+      trimmed,
+    ) &&
+    trimmed.split(/\s+/).length <= 10
+  ) {
+    return false;
+  }
+  return (
+    /^(i |i'm |i am |you |we |they |he |she |it |this |that |what |where |which |how |who |when |why |do |does |did |are |is |am |from |the |a |an |yes |no |hi |hello |nice |great |sorry )/i.test(
+      trimmed,
+    ) ||
+    (/^[A-Za-z][A-Za-z0-9 ,'’?.!-]*[.?!]?$/.test(trimmed) &&
+      trimmed.split(/\s+/).length >= 4)
+  );
+}
+
+function hasEnglishGloss(text: string): boolean {
+  return text
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .some((line) => looksLikeEnglishGloss(line));
 }
 
 function needsNonLatinRepair(language: SupportedLanguage, dialogue: string): boolean {
@@ -105,12 +156,18 @@ function needsNonLatinRepair(language: SupportedLanguage, dialogue: string): boo
   return false;
 }
 
-function needsBrevityRepair(level: ProficiencyLevel | undefined, dialogue: string): boolean {
+function needsBrevityRepair(
+  level: ProficiencyLevel | undefined,
+  dialogue: string,
+  showEnglish?: boolean,
+): boolean {
   if (level !== "Beginner") return false;
   if (countQuestions(dialogue) > 1) return true;
   const lines = dialogue.split(/\n/).filter((line) => line.trim());
-  if (lines.length > 4) return true;
-  if (dialogue.replace(/\s+/g, "").length > 220) return true;
+  // Allow native + romanization + optional English (up to 2 sentence triples)
+  const maxLines = showEnglish ? 6 : 4;
+  if (lines.length > maxLines) return true;
+  if (dialogue.replace(/\s+/g, "").length > (showEnglish ? 320 : 220)) return true;
   return false;
 }
 
@@ -170,30 +227,44 @@ async function repairDialogue(input: {
   learnerName?: string;
   lastUserMessage?: string;
   reason: "script" | "brevity" | "both";
+  showEnglishUnderReplies?: boolean;
 }): Promise<string> {
   const name = input.learnerName?.trim() || "the learner";
+  const keepEnglish = Boolean(input.showEnglishUnderReplies);
   try {
     const completion = await aiClient.chat.completions.create({
       model: env.AI_MODEL,
       temperature: 0,
-      max_tokens: 320,
+      max_completion_tokens: 420,
+      ...(isReasoningModel(env.AI_MODEL) ? { include_reasoning: false } : {}),
       messages: [
         {
           role: "system",
           content: `Rewrite Polly's ${input.language} tutor reply.
 Rules:
 - You are Polly. Address the learner as ${name}. Never call the learner Polly.
-- If the learner asked something, your FIRST sentence MUST answer it directly (e.g. say where Polly is from).
+- If the learner asked something, your FIRST sentence MUST answer it directly.
   Learner said: "${(input.lastUserMessage || "").slice(0, 300)}"
 - Do not dodge with an unrelated scenario question.
-- ${input.level === "Beginner" ? "Beginner: 1–2 short sentences max, only ONE question max. Simple vocabulary." : "Keep it concise."}
+- ${input.level === "Beginner" ? "Beginner: 1–2 short sentences max, only ONE question max." : "Keep it concise."}
 ${
   NON_LATIN_LANGUAGES.includes(input.language)
-    ? `- Output EXACTLY this shape (romanization is mandatory — never omit line 2):
-Native script sentence(s) here.
-Romanization for those exact sentences here.
+    ? keepEnglish
+      ? `- Output EXACTLY:
+Native script
+Romanization
+English translation
+- No | characters.`
+      : `- Output EXACTLY:
+Native script
+Romanization
 - No English. No | characters.`
-    : "- Output only the dialogue in the target language. No English meta."
+    : keepEnglish
+      ? `- Output:
+${input.language} dialogue
+English translation
+- No | characters.`
+      : `- Output only the dialogue in ${input.language}. No English meta.`
 }
 - No correction block.`,
         },
@@ -202,9 +273,12 @@ Romanization for those exact sentences here.
           content: `Repair reason: ${input.reason}\n\n${input.dialogue.slice(0, 2000)}`,
         },
       ],
-    });
+    } as never);
 
-    const repaired = completionText(completion.choices?.[0]?.message?.content)
+    const repaired = extractMessageText(
+      (completion as { choices?: Array<{ message?: { content?: unknown } }> })
+        .choices?.[0]?.message,
+    )
       .trim()
       .replace(/\|/g, "");
     if (!repaired) return input.dialogue;
@@ -212,17 +286,28 @@ Romanization for those exact sentences here.
     if (NON_LATIN_LANGUAGES.includes(input.language)) {
       const okNative = hasNativeScript(input.language, repaired);
       const okRoma = hasRomanizationText(repaired);
-      if (okNative && okRoma) return repaired;
-      if (!okNative && !hasNativeScript(input.language, input.dialogue)) {
-        // Prefer repaired if original also lacked native
-        return repaired || input.dialogue;
-      }
-      // Keep original when repair lost native script
       if (!okNative) return input.dialogue;
-      // Native kept but still no romaji — try addRomanization next
+      if (okNative && okRoma) {
+        if (keepEnglish && !hasEnglishGloss(repaired) && hasEnglishGloss(input.dialogue)) {
+          // Keep original English if repair dropped it
+          const englishLine = input.dialogue
+            .split(/\n/)
+            .map((l) => l.trim())
+            .find((l) => looksLikeEnglishGloss(l));
+          return englishLine ? `${repaired.trim()}\n${englishLine}` : repaired;
+        }
+        return repaired;
+      }
       return repaired;
     }
 
+    if (keepEnglish && !hasEnglishGloss(repaired) && hasEnglishGloss(input.dialogue)) {
+      const englishLine = input.dialogue
+        .split(/\n/)
+        .map((l) => l.trim())
+        .find((l) => looksLikeEnglishGloss(l));
+      return englishLine ? `${repaired.trim()}\n${englishLine}` : repaired;
+    }
     return repaired;
   } catch (error) {
     console.error("Dialogue repair failed:", error);
@@ -230,20 +315,39 @@ Romanization for those exact sentences here.
   }
 }
 
+function extractEnglishLinesFromDialogue(dialogue: string): string[] {
+  return dialogue
+    .split(/\n/)
+    .map((line) => line.trim())
+    .filter((line) => looksLikeEnglishGloss(line));
+}
+
+function appendPreservedEnglish(dialogue: string, englishLines: string[]): string {
+  if (!englishLines.length) return dialogue;
+  if (hasEnglishGloss(dialogue)) return dialogue;
+  return `${dialogue.trim()}\n${englishLines.join("\n")}`.trim();
+}
+
 /** Focused pass: keep native lines, add romanization underneath. */
 async function addRomanization(input: {
   language: SupportedLanguage;
   dialogue: string;
+  keepEnglish?: boolean;
 }): Promise<string> {
   if (!NON_LATIN_LANGUAGES.includes(input.language)) return input.dialogue;
   if (!hasNativeScript(input.language, input.dialogue)) return input.dialogue;
   if (hasRomanizationText(input.dialogue)) return input.dialogue;
 
+  const preservedEnglish = input.keepEnglish
+    ? extractEnglishLinesFromDialogue(input.dialogue)
+    : [];
+
   try {
     const completion = await aiClient.chat.completions.create({
       model: env.AI_MODEL,
       temperature: 0,
-      max_tokens: 280,
+      max_completion_tokens: 320,
+      ...(isReasoningModel(env.AI_MODEL) ? { include_reasoning: false } : {}),
       messages: [
         {
           role: "system",
@@ -251,16 +355,20 @@ async function addRomanization(input: {
 Output ONLY:
 Line(s) of the original native script (keep meaning; you may lightly fix if broken)
 Matching full-sentence romanization on the next line(s)
-No English. No | . No commentary.`,
+${input.keepEnglish ? "Then keep any English translation line(s) last." : "No English."}
+No | . No commentary.`,
         },
         {
           role: "user",
           content: input.dialogue.slice(0, 1500),
         },
       ],
-    });
+    } as never);
 
-    const repaired = completionText(completion.choices?.[0]?.message?.content)
+    const repaired = extractMessageText(
+      (completion as { choices?: Array<{ message?: { content?: unknown } }> })
+        .choices?.[0]?.message,
+    )
       .trim()
       .replace(/\|/g, "");
     if (
@@ -268,11 +376,56 @@ No English. No | . No commentary.`,
       hasNativeScript(input.language, repaired) &&
       hasRomanizationText(repaired)
     ) {
-      return repaired;
+      return appendPreservedEnglish(repaired, preservedEnglish);
     }
     return input.dialogue;
   } catch (error) {
     console.error("Romanization add failed:", error);
+    return input.dialogue;
+  }
+}
+
+/** Last-chance English gloss if stream/repair dropped it. */
+async function ensureEnglishGloss(input: {
+  language: SupportedLanguage;
+  dialogue: string;
+  learnerName?: string;
+}): Promise<string> {
+  if (hasEnglishGloss(input.dialogue)) return input.dialogue;
+  const name = input.learnerName?.trim() || "the learner";
+  try {
+    const completion = await aiClient.chat.completions.create({
+      model: env.AI_MODEL,
+      temperature: 0,
+      max_completion_tokens: 200,
+      ...(isReasoningModel(env.AI_MODEL) ? { include_reasoning: false } : {}),
+      messages: [
+        {
+          role: "system",
+          content: `Append ONE plain English translation line under Polly's ${input.language} reply.
+Keep every existing line exactly as-is. Add only the English meaning at the end.
+No labels like "English:". Address the learner as ${name}. No | characters.`,
+        },
+        { role: "user", content: input.dialogue.slice(0, 1500) },
+      ],
+    } as never);
+
+    const repaired = extractMessageText(
+      (completion as { choices?: Array<{ message?: { content?: unknown } }> })
+        .choices?.[0]?.message,
+    )
+      .trim()
+      .replace(/\|/g, "");
+    if (repaired && hasEnglishGloss(repaired) && repaired.includes(input.dialogue.split("\n")[0]!.trim().slice(0, 12))) {
+      return repaired;
+    }
+    // If model returned only English, append it
+    if (repaired && looksLikeEnglishGloss(repaired) && !repaired.includes("\n")) {
+      return `${input.dialogue.trim()}\n${repaired}`;
+    }
+    return input.dialogue;
+  } catch (error) {
+    console.error("English gloss ensure failed:", error);
     return input.dialogue;
   }
 }
@@ -400,6 +553,7 @@ async function finalizeReply(
   // Keep post-stream work short on Render (proxy idle timeouts)
   const repairBudgetMs = fast ? 6000 : 12000;
   const correctionBudgetMs = fast ? 4000 : 8000;
+  const showEnglish = Boolean(input.showEnglishUnderReplies);
 
   if (helpRequested) {
     let dialogue = ensureHelpHasEnglish(parsed.dialogue);
@@ -413,9 +567,12 @@ async function finalizeReply(
 
   let dialogue = parsed.dialogue.replace(/\|/g, "");
   let correction = parsed.correction;
+  const preservedEnglish = showEnglish
+    ? extractEnglishLinesFromDialogue(dialogue)
+    : [];
 
   const scriptBad = needsNonLatinRepair(input.language, dialogue);
-  const brevityBad = needsBrevityRepair(input.level, dialogue);
+  const brevityBad = needsBrevityRepair(input.level, dialogue, showEnglish);
   const answerBad = needsAnswerFirstRepair(lastUserMessage, dialogue);
 
   if (scriptBad || brevityBad || answerBad) {
@@ -427,10 +584,12 @@ async function finalizeReply(
         learnerName: input.learnerName,
         lastUserMessage,
         reason: scriptBad && brevityBad ? "both" : scriptBad ? "script" : "brevity",
+        showEnglishUnderReplies: showEnglish,
       }),
       repairBudgetMs,
       dialogue,
     );
+    dialogue = appendPreservedEnglish(dialogue, preservedEnglish);
   }
 
   if (
@@ -439,9 +598,26 @@ async function finalizeReply(
     !hasRomanizationText(dialogue)
   ) {
     dialogue = await withTimeout(
-      addRomanization({ language: input.language, dialogue }),
+      addRomanization({
+        language: input.language,
+        dialogue,
+        keepEnglish: showEnglish,
+      }),
       Math.min(repairBudgetMs, 5000),
       dialogue,
+    );
+    dialogue = appendPreservedEnglish(dialogue, preservedEnglish);
+  }
+
+  if (showEnglish && !hasEnglishGloss(dialogue)) {
+    dialogue = await withTimeout(
+      ensureEnglishGloss({
+        language: input.language,
+        dialogue,
+        learnerName: input.learnerName,
+      }),
+      Math.min(repairBudgetMs, fast ? 3500 : 5000),
+      appendPreservedEnglish(dialogue, preservedEnglish),
     );
   }
 
@@ -463,6 +639,19 @@ async function finalizeReply(
   return { ...parsed, dialogue, correction };
 }
 
+function isFailedPollyReply(content: string): boolean {
+  return /Sorry\s*[—-]\s*Polly could not generate a response/i.test(content);
+}
+
+function sanitizeHistory(
+  history: Array<{ role: "user" | "assistant"; content: string }>,
+): Array<{ role: "user" | "assistant"; content: string }> {
+  return history.filter((message) => {
+    if (message.role !== "assistant") return true;
+    return !isFailedPollyReply(message.content);
+  });
+}
+
 function buildExtraNotes(
   input: GenerateReplyInput,
   helpRequested: boolean,
@@ -475,9 +664,62 @@ function buildExtraNotes(
   ];
   const beginner = beginnerNote(input.level);
   if (beginner) notes.push(beginner);
-  const script = scriptFormatNote(input.language, input.learnerName);
+  const script = scriptFormatNote(
+    input.language,
+    input.learnerName,
+    input.showEnglishUnderReplies,
+  );
   if (script) notes.push(script);
   return notes;
+}
+
+async function generateOnce(
+  input: GenerateReplyInput,
+  helpRequested: boolean,
+  lastUserContent?: string,
+): Promise<string> {
+  const history = sanitizeHistory(input.history);
+  const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
+
+  const systemPrompt = buildSystemPrompt({
+    ...input,
+    helpRequested,
+    lastAssistantMessage: lastAssistant?.content,
+  });
+
+  const messages = buildChatContext({
+    systemPrompt,
+    history,
+    extraSystemNotes: buildExtraNotes(input, helpRequested, lastUserContent),
+  });
+
+  const response = await aiClient.chat.completions.create({
+    messages,
+    model: env.AI_MODEL,
+    temperature: isReasoningModel(env.AI_MODEL)
+      ? 0.6
+      : input.level === "Beginner"
+        ? 0.35
+        : 0.45,
+    max_completion_tokens: input.level === "Beginner" ? 900 : 1200,
+    ...(isReasoningModel(env.AI_MODEL) ? { include_reasoning: false } : {}),
+  } as never);
+
+  const completion = response as {
+    choices?: Array<{
+      finish_reason?: string | null;
+      message?: { content?: unknown; reasoning?: unknown };
+    }>;
+  };
+
+  const reply = extractMessageText(completion.choices?.[0]?.message);
+  if (!reply.trim()) {
+    console.error("Empty AI reply", {
+      model: env.AI_MODEL,
+      finish: completion.choices?.[0]?.finish_reason,
+    });
+  }
+  return reply;
 }
 
 export const aiService = {
@@ -486,58 +728,29 @@ export const aiService = {
   },
 
   async generateReply(input: GenerateReplyInput): Promise<ParsedAiReply> {
-    const lastUser = [...input.history].reverse().find((m) => m.role === "user");
+    const history = sanitizeHistory(input.history);
+    const lastUser = [...history].reverse().find((m) => m.role === "user");
     const helpRequested =
       input.helpRequested ?? (lastUser ? buildHelpDetection(lastUser.content) : false);
 
-    const lastAssistant = [...input.history]
-      .reverse()
-      .find((m) => m.role === "assistant");
-
-    const systemPrompt = buildSystemPrompt({
-      ...input,
+    let reply = await generateOnce(
+      { ...input, history },
       helpRequested,
-      lastAssistantMessage: lastAssistant?.content,
-    });
-
-    const messages = buildChatContext({
-      systemPrompt,
-      history: input.history,
-      extraSystemNotes: buildExtraNotes(input, helpRequested, lastUser?.content),
-    });
-
-    const response = await aiClient.chat.completions.create({
-      messages,
-      model: env.AI_MODEL,
-      temperature: isReasoningModel(env.AI_MODEL)
-        ? 0.6
-        : input.level === "Beginner"
-          ? 0.35
-          : 0.45,
-      max_completion_tokens: input.level === "Beginner" ? 900 : 1200,
-      ...(isReasoningModel(env.AI_MODEL)
-        ? { include_reasoning: false }
-        : {}),
-    } as never);
-
-    const completion = response as {
-      choices?: Array<{
-        finish_reason?: string | null;
-        message?: { content?: unknown; reasoning?: unknown };
-      }>;
-    };
-
-    let reply = extractMessageText(completion.choices?.[0]?.message);
+      lastUser?.content,
+    );
     if (!reply.trim()) {
-      console.error("Empty AI reply", {
-        model: env.AI_MODEL,
-        finish: completion.choices?.[0]?.finish_reason,
-      });
+      reply = await generateOnce(
+        { ...input, history },
+        helpRequested,
+        lastUser?.content,
+      );
+    }
+    if (!reply.trim()) {
       reply = "Sorry — Polly could not generate a response. Please try again.";
     }
 
     return finalizeReply(
-      input,
+      { ...input, history },
       parseAiReply(reply),
       helpRequested,
       lastUser?.content,
@@ -545,13 +758,12 @@ export const aiService = {
   },
 
   async *streamReply(input: GenerateReplyInput): AsyncGenerator<string, ParsedAiReply> {
-    const lastUser = [...input.history].reverse().find((m) => m.role === "user");
+    const history = sanitizeHistory(input.history);
+    const lastUser = [...history].reverse().find((m) => m.role === "user");
     const helpRequested =
       input.helpRequested ?? (lastUser ? buildHelpDetection(lastUser.content) : false);
 
-    const lastAssistant = [...input.history]
-      .reverse()
-      .find((m) => m.role === "assistant");
+    const lastAssistant = [...history].reverse().find((m) => m.role === "assistant");
 
     const systemPrompt = buildSystemPrompt({
       ...input,
@@ -561,7 +773,7 @@ export const aiService = {
 
     const messages = buildChatContext({
       systemPrompt,
-      history: input.history,
+      history,
       extraSystemNotes: buildExtraNotes(input, helpRequested, lastUser?.content),
     });
 
@@ -575,9 +787,7 @@ export const aiService = {
           : 0.45,
       max_completion_tokens: input.level === "Beginner" ? 900 : 1200,
       stream: true,
-      ...(isReasoningModel(env.AI_MODEL)
-        ? { include_reasoning: false }
-        : {}),
+      ...(isReasoningModel(env.AI_MODEL) ? { include_reasoning: false } : {}),
     } as never)) as unknown as AsyncIterable<{
       choices?: Array<{
         delta?: { content?: string | null; reasoning?: string | null };
@@ -594,13 +804,26 @@ export const aiService = {
     }
 
     if (!raw.trim()) {
-      console.error("Empty AI stream reply", { model: env.AI_MODEL });
-      raw = "Sorry — Polly could not generate a response. Please try again.";
-      yield raw;
+      console.error("Empty AI stream reply — falling back to non-stream", {
+        model: env.AI_MODEL,
+        language: input.language,
+      });
+      raw = await generateOnce(
+        { ...input, history },
+        helpRequested,
+        lastUser?.content,
+      );
+      if (raw.trim()) {
+        yield raw;
+      } else {
+        console.error("Empty AI reply after stream fallback", { model: env.AI_MODEL });
+        raw = "Sorry — Polly could not generate a response. Please try again.";
+        yield raw;
+      }
     }
 
     return finalizeReply(
-      input,
+      { ...input, history },
       parseAiReply(raw),
       helpRequested,
       lastUser?.content,

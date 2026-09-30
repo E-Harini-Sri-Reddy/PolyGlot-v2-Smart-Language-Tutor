@@ -16,6 +16,7 @@ export type UserSettings = {
   preferredTopics: string[];
   theme?: string;
   notificationsEnabled?: boolean;
+  showEnglishUnderReplies?: boolean;
 };
 
 export async function getSettings() {

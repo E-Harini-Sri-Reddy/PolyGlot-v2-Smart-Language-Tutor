@@ -239,7 +239,17 @@ export function DictionaryPage() {
                     </button>
                   </div>
 
-                  <p className="mt-3 text-sm text-ink">{entry.meaning}</p>
+                  <div className="mt-3">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-ink-soft">
+                      Meaning
+                    </p>
+                    <p className="mt-1 text-sm text-ink">
+                      {entry.meaning &&
+                      !/^meaning of\b/i.test(entry.meaning.trim())
+                        ? entry.meaning
+                        : "Meaning unavailable — try saving this word again from chat."}
+                    </p>
+                  </div>
                   {entry.exampleSentence && (
                     <p className="mt-2 text-xs italic text-ink-soft">
                       “{entry.exampleSentence}”

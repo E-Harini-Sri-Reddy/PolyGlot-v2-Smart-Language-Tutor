@@ -27,6 +27,7 @@ export const updateSettingsSchema = z.object({
   preferredTopics: z.array(z.string().trim().min(1).max(40)).max(12).optional(),
   theme: z.enum(["light", "dark"]).optional(),
   notificationsEnabled: z.boolean().optional(),
+  showEnglishUnderReplies: z.boolean().optional(),
 });
 
 export const completeOnboardingSchema = z.object({

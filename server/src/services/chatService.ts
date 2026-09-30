@@ -273,6 +273,7 @@ export const chatService = {
         (settings?.tutorPersonality as TutorPersonality) || "Friendly Teacher",
       helpRequested: helpMode,
       memoryBlock: memory.memoryBlock,
+      showEnglishUnderReplies: Boolean(settings?.showEnglishUnderReplies),
     };
 
     if (res) {
@@ -440,6 +441,7 @@ export const chatService = {
         (settings?.tutorPersonality as TutorPersonality) || "Friendly Teacher",
       helpRequested: helpMode,
       memoryBlock: memory.memoryBlock,
+      showEnglishUnderReplies: Boolean(settings?.showEnglishUnderReplies),
     };
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");

@@ -15,6 +15,7 @@ import {
   streamMessage,
 } from "../services/chatService";
 import { listScenarios, type Scenario } from "../services/scenarioService";
+import { getSettings } from "../services/settingsService";
 import type { ChatMessage, Conversation } from "../types";
 import { MessageBubble } from "../features/chat/components/MessageBubble";
 import { ConfirmModal } from "../components/ConfirmModal";
@@ -58,6 +59,7 @@ export function ChatPage() {
   const [sessionSummary, setSessionSummary] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [showEnglishUnderReplies, setShowEnglishUnderReplies] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const streamTargetRef = useRef("");
@@ -112,12 +114,16 @@ export function ChatPage() {
   useEffect(() => {
     void (async () => {
       try {
-        const [chatData, scenarioData] = await Promise.all([
+        const [chatData, scenarioData, settingsData] = await Promise.all([
           listConversations(),
           listScenarios(),
+          getSettings(),
         ]);
         setConversations(chatData.conversations);
         setPresets(scenarioData.scenarios);
+        setShowEnglishUnderReplies(
+          Boolean(settingsData.settings.showEnglishUnderReplies),
+        );
       } catch {
         // ignore first-load failures
       }
@@ -671,6 +677,7 @@ export function ChatPage() {
                     message.id === messages[messages.length - 1]?.id)
                 }
                 regenerating={sending && message.id === streamingId}
+                showEnglishUnderReplies={showEnglishUnderReplies}
                 onRegenerate={
                   message.role === "assistant" && !sending
                     ? (id) => void handleRegenerate(id)

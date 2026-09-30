@@ -69,10 +69,12 @@ async function lookupMeaningFromContext(input: {
   hintMeaning?: string;
   hintPronunciation?: string;
 }) {
+  const isReasoning = /gpt-oss|qwen3|minimax/i.test(env.AI_MODEL);
   const completion = await aiClient.chat.completions.create({
     model: env.AI_MODEL,
     temperature: 0,
-    max_tokens: 160,
+    max_completion_tokens: 220,
+    ...(isReasoning ? { include_reasoning: false } : { max_tokens: 220 }),
     messages: [
       {
         role: "system",
@@ -81,8 +83,10 @@ Return ONLY valid JSON:
 {"meaning":"short English gloss for THIS word only","pronunciation":"romanization/reading for THIS word only"}
 
 Rules:
+- meaning MUST be a real English definition/translation (e.g. "you make/do" for German machst). NEVER return placeholders like "Meaning of X".
 - meaning and pronunciation MUST belong to the exact given word/phrase — not neighboring words in the context.
-- For Japanese: pronunciation is Hepburn romaji for that exact item (国 → "kuni", not "ku").
+- For conjugated verbs, gloss the conjugated sense (machst → "(you) make/do").
+- For Japanese: pronunciation is Hepburn romaji for that exact item.
 - For Chinese: pinyin with tones for that exact item.
 - For Korean: Revised Romanization for that exact item.
 - For Arabic/Hindi: clean Latin reading for that exact item.
@@ -93,18 +97,23 @@ Rules:
         role: "user",
         content: `Language: ${input.language}
 Word/phrase to define: ${input.word}
-${input.hintMeaning ? `Hint meaning (verify/correct): ${input.hintMeaning}` : ""}
+${input.hintMeaning && !isPlaceholderMeaning(input.hintMeaning) ? `Hint meaning (verify/correct): ${input.hintMeaning}` : ""}
 ${input.hintPronunciation ? `Hint pronunciation (verify/correct): ${input.hintPronunciation}` : ""}
 Context (may include other words — ignore mismatches):
 ${input.context.slice(0, 1200)}`,
       },
     ],
-  });
+  } as never);
 
-  let raw = completion.choices?.[0]?.message?.content ?? "";
-  if (Array.isArray(raw)) {
-    raw = raw.map((part) => ("text" in part ? String(part.text) : "")).join("");
-  }
+  const message = (completion as {
+    choices?: Array<{ message?: { content?: unknown } }>;
+  }).choices?.[0]?.message;
+  let raw =
+    typeof message?.content === "string"
+      ? message.content
+      : Array.isArray(message?.content)
+        ? message.content.map((part) => ("text" in part ? String(part.text) : "")).join("")
+        : "";
 
   try {
     const start = raw.indexOf("{");
@@ -114,9 +123,9 @@ ${input.context.slice(0, 1200)}`,
         meaning?: string;
         pronunciation?: string;
       };
-      const meaning = String(parsed.meaning || "").trim();
-      const pronunciation = String(parsed.pronunciation || "").trim();
-      if (meaning) {
+      const meaning = cleanPipeText(String(parsed.meaning || ""));
+      const pronunciation = cleanPipeText(String(parsed.pronunciation || ""));
+      if (isUsableMeaning(meaning)) {
         return { meaning, pronunciation };
       }
     }
@@ -124,10 +133,80 @@ ${input.context.slice(0, 1200)}`,
     // fall through
   }
 
-  return {
-    meaning: input.hintMeaning?.trim() || `Meaning of “${input.word}”`,
-    pronunciation: input.hintPronunciation?.trim() || "",
-  };
+  // One retry with a stricter prompt if the first pass failed
+  try {
+    const retry = await aiClient.chat.completions.create({
+      model: env.AI_MODEL,
+      temperature: 0,
+      max_completion_tokens: 160,
+      ...(isReasoning ? { include_reasoning: false } : { max_tokens: 160 }),
+      messages: [
+        {
+          role: "system",
+          content: `Return ONLY JSON: {"meaning":"English gloss","pronunciation":"reading"}
+Define the exact ${input.language} word/phrase. No placeholders.`,
+        },
+        {
+          role: "user",
+          content: `Word: ${input.word}\nContext: ${input.context.slice(0, 600)}`,
+        },
+      ],
+    } as never);
+    const retryMsg = (retry as {
+      choices?: Array<{ message?: { content?: unknown } }>;
+    }).choices?.[0]?.message;
+    raw =
+      typeof retryMsg?.content === "string"
+        ? retryMsg.content
+        : Array.isArray(retryMsg?.content)
+          ? retryMsg.content.map((part) => ("text" in part ? String(part.text) : "")).join("")
+          : "";
+    const start = raw.indexOf("{");
+    const end = raw.lastIndexOf("}");
+    if (start >= 0 && end > start) {
+      const parsed = JSON.parse(raw.slice(start, end + 1)) as {
+        meaning?: string;
+        pronunciation?: string;
+      };
+      const meaning = cleanPipeText(String(parsed.meaning || ""));
+      const pronunciation = cleanPipeText(String(parsed.pronunciation || ""));
+      if (isUsableMeaning(meaning)) {
+        return { meaning, pronunciation };
+      }
+    }
+  } catch {
+    // fall through
+  }
+
+  const hint = input.hintMeaning?.trim() || "";
+  if (isUsableMeaning(hint)) {
+    return {
+      meaning: cleanPipeText(hint),
+      pronunciation: input.hintPronunciation?.trim() || "",
+    };
+  }
+
+  throw new AppError(
+    502,
+    "MEANING_LOOKUP_FAILED",
+    `Could not determine a clear English meaning for “${input.word}”. Try again.`,
+  );
+}
+
+function isPlaceholderMeaning(meaning: string): boolean {
+  const normalized = meaning.trim().toLowerCase();
+  if (!normalized) return true;
+  if (/^meaning of\b/.test(normalized)) return true;
+  if (/^definition of\b/.test(normalized)) return true;
+  if (normalized === "n/a" || normalized === "unknown") return true;
+  return false;
+}
+
+function isUsableMeaning(meaning: string): boolean {
+  const cleaned = meaning.trim();
+  if (cleaned.length < 2) return false;
+  if (isPlaceholderMeaning(cleaned)) return false;
+  return true;
 }
 
 function sanitizeEntryFields<T extends {
@@ -203,8 +282,12 @@ export const dictionaryService = {
   ) {
     const word = normalizeWord(input.word, input.language);
     const meaning = cleanPipeText(input.meaning);
-    if (!word || !meaning) {
-      throw new AppError(400, "INVALID_WORD", "Word and meaning are required.");
+    if (!word || !isUsableMeaning(meaning)) {
+      throw new AppError(
+        400,
+        "INVALID_WORD",
+        "Word and a clear English meaning are required.",
+      );
     }
 
     const existing = await dictionaryRepository.findByUserWord(

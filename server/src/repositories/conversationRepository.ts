@@ -21,11 +21,29 @@ export const conversationRepository = {
   },
 
   async incrementMessageCount(id: string, by = 1) {
-    return Conversation.findByIdAndUpdate(
-      id,
-      { $inc: { messageCount: by } },
-      { new: true },
+    const conversation = await Conversation.findById(id);
+    if (!conversation) return null;
+    conversation.messageCount += by;
+    if (conversation.startedAt && conversation.status !== "completed") {
+      conversation.durationSeconds = Math.max(
+        0,
+        Math.floor((Date.now() - conversation.startedAt.getTime()) / 1000),
+      );
+    }
+    await conversation.save();
+    return conversation;
+  },
+
+  async refreshDuration(id: string) {
+    const conversation = await Conversation.findById(id);
+    if (!conversation?.startedAt) return null;
+    const end = conversation.endedAt || new Date();
+    conversation.durationSeconds = Math.max(
+      0,
+      Math.floor((end.getTime() - conversation.startedAt.getTime()) / 1000),
     );
+    await conversation.save();
+    return conversation;
   },
 
   deleteForUser(id: string, userId: string) {

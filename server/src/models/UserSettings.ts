@@ -32,6 +32,7 @@ const userSettingsSchema = new Schema(
     },
     theme: { type: String, enum: ["light", "dark"], default: "dark" },
     notificationsEnabled: { type: Boolean, default: true },
+    showEnglishUnderReplies: { type: Boolean, default: false },
     dailyGoalMinutes: { type: Number, default: 15 },
     learningGoal: { type: String, default: "Conversation" },
     preferredTopics: { type: [String], default: [] },
