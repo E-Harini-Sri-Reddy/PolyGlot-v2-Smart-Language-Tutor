@@ -5,6 +5,11 @@
     "jsx": "react-jsx",
     "noEmit": true,
     "types": ["vite/client"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
     "paths": {
       "@/*": ["./src/*"]
     }
