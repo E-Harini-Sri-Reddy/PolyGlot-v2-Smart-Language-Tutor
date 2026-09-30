@@ -11,6 +11,7 @@ import {
   endConversation,
   getConversation,
   listConversations,
+  regenerateMessage,
   streamMessage,
 } from "../services/chatService";
 import { listScenarios, type Scenario } from "../services/scenarioService";
@@ -53,10 +54,45 @@ export function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
   const [sending, setSending] = useState(false);
+  const [streamingId, setStreamingId] = useState<string | null>(null);
   const [sessionSummary, setSessionSummary] = useState<string | null>(null);
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const streamTargetRef = useRef("");
+  const streamShownRef = useRef("");
+  const streamPaceTimerRef = useRef<number | null>(null);
+
+  function focusComposer() {
+    window.requestAnimationFrame(() => {
+      inputRef.current?.focus();
+    });
+  }
+
+  function stopStreamPacing() {
+    if (streamPaceTimerRef.current != null) {
+      window.clearInterval(streamPaceTimerRef.current);
+      streamPaceTimerRef.current = null;
+    }
+  }
+
+  function startStreamPacing(messageId: string) {
+    if (streamPaceTimerRef.current != null) return;
+    streamPaceTimerRef.current = window.setInterval(() => {
+      const target = streamTargetRef.current;
+      const shown = streamShownRef.current;
+      if (target.length <= shown.length) return;
+
+      // Reveal a few characters per tick so fast SSE bursts still feel gradual
+      const step = target.length - shown.length > 80 ? 4 : 2;
+      const next = target.slice(0, Math.min(target.length, shown.length + step));
+      streamShownRef.current = next;
+      setMessages((prev) =>
+        prev.map((m) => (m.id === messageId ? { ...m, content: next } : m)),
+      );
+    }, 32);
+  }
 
   const activeConversation = useMemo(
     () => conversations.find((c) => c._id === activeId) || null,
@@ -89,8 +125,20 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, status]);
+    bottomRef.current?.scrollIntoView({ behavior: streamingId ? "auto" : "smooth" });
+  }, [messages, status, streamingId]);
+
+  function visibleStreamText(raw: string): string {
+    // Hide in-progress correction payloads so the spoken reply can stream cleanly
+    let text = raw.replace(
+      /<<<\s*CORRECTION\s*>>>[\s\S]*?(<<<\s*END\s*>>>|$)/gi,
+      "",
+    );
+    // If a correction marker just started mid-chunk, cut from there
+    const openIdx = text.search(/<<<\s*CORRECTION\s*>>>/i);
+    if (openIdx >= 0) text = text.slice(0, openIdx);
+    return text.replace(/^\s+/, "");
+  }
 
   async function loadConversation(id: string) {
     setError(null);
@@ -193,17 +241,22 @@ export function ChatPage() {
     setSending(true);
     setError(null);
     setStatus("Polly is typing...");
+    focusComposer();
 
     const userMessage: ChatMessage = {
       id: crypto.randomUUID(),
       role: "user",
       content,
     };
-    const streamingId = crypto.randomUUID();
+    const nextStreamingId = crypto.randomUUID();
+    stopStreamPacing();
+    streamTargetRef.current = "";
+    streamShownRef.current = "";
+    setStreamingId(nextStreamingId);
     setMessages((prev) => [
       ...prev,
       userMessage,
-      { id: streamingId, role: "assistant", content: "" },
+      { id: nextStreamingId, role: "assistant", content: "" },
     ]);
 
     let rawBuffer = "";
@@ -211,47 +264,173 @@ export function ChatPage() {
     await streamMessage(activeId, content, {
       onToken: (token) => {
         rawBuffer += token;
-        const visible = rawBuffer
-          .replace(/<<<CORRECTION>>>[\s\S]*?(<<<END>>>|$)/gi, "")
-          .trimStart();
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === streamingId ? { ...m, content: visible || "..." } : m,
-          ),
-        );
+        const visible = visibleStreamText(rawBuffer);
+        streamTargetRef.current = visible;
+        setStatus(visible ? "Polly is replying..." : "Polly is typing...");
+        startStreamPacing(nextStreamingId);
       },
       onDone: (message) => {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === streamingId
-              ? {
-                  id: message.id,
-                  role: "assistant",
-                  content: message.content,
-                  correction: message.correction,
-                  helpMode: message.helpMode,
-                  createdAt: message.createdAt,
-                }
-              : m,
-          ),
-        );
-        setStatus("Ready");
-        setSending(false);
+        const finalContent = message.content || "";
+        streamTargetRef.current = finalContent;
+        startStreamPacing(nextStreamingId);
+
+        const settle = () => {
+          stopStreamPacing();
+          streamTargetRef.current = "";
+          streamShownRef.current = "";
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === nextStreamingId
+                ? {
+                    id: message.id,
+                    role: "assistant",
+                    content: finalContent,
+                    correction: message.correction,
+                    helpMode: message.helpMode,
+                    createdAt: message.createdAt,
+                  }
+                : m,
+            ),
+          );
+          setStreamingId(null);
+          setStatus("Ready");
+          setSending(false);
+          focusComposer();
+        };
+
+        // Let the paced reveal catch up before attaching correction / ending stream UI
+        if (streamShownRef.current.length >= finalContent.length) {
+          settle();
+          return;
+        }
+        const watchId = window.setInterval(() => {
+          if (streamShownRef.current.length >= finalContent.length) {
+            window.clearInterval(watchId);
+            settle();
+          }
+        }, 40);
+        window.setTimeout(() => {
+          window.clearInterval(watchId);
+          settle();
+        }, 4000);
       },
       onError: (message) => {
+        stopStreamPacing();
+        const partial = streamShownRef.current.trim();
+        streamTargetRef.current = "";
+        streamShownRef.current = "";
         setError(message);
         setStatus("Error");
         setSending(false);
+        setStreamingId(null);
         setMessages((prev) =>
           prev.map((m) =>
-            m.id === streamingId
+            m.id === nextStreamingId
               ? {
                   ...m,
-                  content: "We couldn't reach Polly. Please try again.",
+                  content: partial || "We couldn't reach Polly. Please try again.",
                 }
               : m,
           ),
         );
+        focusComposer();
+      },
+    });
+  }
+
+  async function handleRegenerate(messageId: string) {
+    if (!activeId || sending) return;
+    setSending(true);
+    setError(null);
+    setStatus("Polly is rewriting...");
+    stopStreamPacing();
+    streamTargetRef.current = "";
+    streamShownRef.current = "";
+    setStreamingId(messageId);
+    setMessages((prev) =>
+      prev.map((m) =>
+        m.id === messageId
+          ? { ...m, content: "", correction: null, helpMode: false }
+          : m,
+      ),
+    );
+    focusComposer();
+
+    let rawBuffer = "";
+
+    await regenerateMessage(activeId, messageId, {
+      onToken: (token) => {
+        rawBuffer += token;
+        const visible = visibleStreamText(rawBuffer);
+        streamTargetRef.current = visible;
+        setStatus(visible ? "Polly is replying..." : "Polly is rewriting...");
+        startStreamPacing(messageId);
+      },
+      onDone: (message) => {
+        const finalContent = message.content || "";
+        streamTargetRef.current = finalContent;
+        startStreamPacing(messageId);
+
+        const settle = () => {
+          stopStreamPacing();
+          streamTargetRef.current = "";
+          streamShownRef.current = "";
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === messageId || m.id === message.id
+                ? {
+                    id: message.id,
+                    role: "assistant",
+                    content: finalContent,
+                    correction: message.correction,
+                    helpMode: message.helpMode,
+                    createdAt: message.createdAt,
+                  }
+                : m,
+            ),
+          );
+          setStreamingId(null);
+          setStatus("Ready");
+          setSending(false);
+          focusComposer();
+        };
+
+        if (streamShownRef.current.length >= finalContent.length) {
+          settle();
+          return;
+        }
+        const watchId = window.setInterval(() => {
+          if (streamShownRef.current.length >= finalContent.length) {
+            window.clearInterval(watchId);
+            settle();
+          }
+        }, 40);
+        window.setTimeout(() => {
+          window.clearInterval(watchId);
+          settle();
+        }, 4000);
+      },
+      onError: (message) => {
+        stopStreamPacing();
+        streamTargetRef.current = "";
+        streamShownRef.current = "";
+        setError(message);
+        setStatus("Error");
+        setSending(false);
+        setStreamingId(null);
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === messageId
+              ? {
+                  ...m,
+                  content:
+                    m.content?.trim() ||
+                    "We couldn't regenerate Polly's reply. Please try again.",
+                }
+              : m,
+          ),
+        );
+        focusComposer();
       },
     });
   }
@@ -485,10 +664,17 @@ export function ChatPage() {
                 message={message}
                 language={language}
                 streaming={
-                  sending &&
-                  message.role === "assistant" &&
-                  !message.correction &&
-                  message.content === "..."
+                  message.id === streamingId ||
+                  (sending &&
+                    message.role === "assistant" &&
+                    !message.content?.trim() &&
+                    message.id === messages[messages.length - 1]?.id)
+                }
+                regenerating={sending && message.id === streamingId}
+                onRegenerate={
+                  message.role === "assistant" && !sending
+                    ? (id) => void handleRegenerate(id)
+                    : undefined
                 }
               />
             ))
@@ -518,15 +704,21 @@ export function ChatPage() {
 
         <div className="flex gap-3 border-t border-mist bg-white/90 p-4">
           <input
+            ref={inputRef}
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === "Enter") void handleSend();
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                if (!sending && input.trim()) void handleSend();
+              }
             }}
-            disabled={!activeId || sending}
+            disabled={!activeId}
             placeholder={
               activeId
-                ? "Type in your target language..."
+                ? sending
+                  ? "Polly is replying… you can keep typing"
+                  : "Type in your target language..."
                 : "Start practice from the left sidebar"
             }
             className="flex-1 rounded-xl border border-mist bg-foam px-4 py-3 outline-none ring-sea focus:ring-2 disabled:opacity-60"

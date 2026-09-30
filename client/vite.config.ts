@@ -19,6 +19,21 @@ export default defineConfig({
       "/api": {
         target: "http://localhost:3001",
         changeOrigin: true,
+        // Keep SSE streams open while Polly generates
+        timeout: 0,
+        proxyTimeout: 0,
+        configure: (proxy) => {
+          proxy.on("proxyRes", (proxyRes) => {
+            const contentType = proxyRes.headers["content-type"];
+            if (
+              typeof contentType === "string" &&
+              contentType.includes("text/event-stream")
+            ) {
+              proxyRes.headers["cache-control"] = "no-cache, no-transform";
+              proxyRes.headers["x-accel-buffering"] = "no";
+            }
+          });
+        },
       },
     },
   },

@@ -19,4 +19,12 @@ export const messageRepository = {
   deleteByConversation(conversationId: string) {
     return Message.deleteMany({ conversationId });
   },
+
+  findById(messageId: string) {
+    return Message.findById(messageId);
+  },
+
+  deleteById(messageId: string) {
+    return Message.findByIdAndDelete(messageId);
+  },
 };

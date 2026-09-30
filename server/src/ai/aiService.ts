@@ -65,6 +65,20 @@ function completionText(content: unknown): string {
   return "";
 }
 
+function isReasoningModel(model: string): boolean {
+  return /gpt-oss|qwen3|minimax/i.test(model);
+}
+
+function extractMessageText(message: {
+  content?: unknown;
+  reasoning?: unknown;
+} | null | undefined): string {
+  const content = completionText(message?.content).trim();
+  if (content) return content;
+  // Last resort: some providers only return reasoning if misconfigured
+  return completionText(message?.reasoning).trim();
+}
+
 function hasRomanizationText(text: string): boolean {
   const lines = text.split(/\n/).map((line) => line.trim()).filter(Boolean);
   return lines.some((line) => {
@@ -493,14 +507,32 @@ export const aiService = {
     });
 
     const response = await aiClient.chat.completions.create({
-      model: env.AI_MODEL,
       messages,
-      temperature: input.level === "Beginner" ? 0.35 : 0.45,
-      max_tokens: input.level === "Beginner" ? 420 : 800,
-    });
+      model: env.AI_MODEL,
+      temperature: isReasoningModel(env.AI_MODEL)
+        ? 0.6
+        : input.level === "Beginner"
+          ? 0.35
+          : 0.45,
+      max_completion_tokens: input.level === "Beginner" ? 900 : 1200,
+      ...(isReasoningModel(env.AI_MODEL)
+        ? { include_reasoning: false }
+        : {}),
+    } as never);
 
-    let reply = completionText(response.choices?.[0]?.message?.content);
+    const completion = response as {
+      choices?: Array<{
+        finish_reason?: string | null;
+        message?: { content?: unknown; reasoning?: unknown };
+      }>;
+    };
+
+    let reply = extractMessageText(completion.choices?.[0]?.message);
     if (!reply.trim()) {
+      console.error("Empty AI reply", {
+        model: env.AI_MODEL,
+        finish: completion.choices?.[0]?.finish_reason,
+      });
       reply = "Sorry — Polly could not generate a response. Please try again.";
     }
 
@@ -533,23 +565,36 @@ export const aiService = {
       extraSystemNotes: buildExtraNotes(input, helpRequested, lastUser?.content),
     });
 
-    const stream = await aiClient.chat.completions.create({
-      model: env.AI_MODEL,
+    const stream = (await aiClient.chat.completions.create({
       messages,
-      temperature: input.level === "Beginner" ? 0.35 : 0.45,
-      max_tokens: input.level === "Beginner" ? 420 : 800,
+      model: env.AI_MODEL,
+      temperature: isReasoningModel(env.AI_MODEL)
+        ? 0.6
+        : input.level === "Beginner"
+          ? 0.35
+          : 0.45,
+      max_completion_tokens: input.level === "Beginner" ? 900 : 1200,
       stream: true,
-    });
+      ...(isReasoningModel(env.AI_MODEL)
+        ? { include_reasoning: false }
+        : {}),
+    } as never)) as unknown as AsyncIterable<{
+      choices?: Array<{
+        delta?: { content?: string | null; reasoning?: string | null };
+      }>;
+    }>;
 
     let raw = "";
     for await (const chunk of stream) {
-      const delta = chunk.choices?.[0]?.delta?.content ?? "";
-      if (!delta) continue;
-      raw += delta;
-      yield delta;
+      const delta = chunk.choices?.[0]?.delta;
+      const piece = delta?.content || delta?.reasoning || "";
+      if (!piece) continue;
+      raw += piece;
+      yield piece;
     }
 
     if (!raw.trim()) {
+      console.error("Empty AI stream reply", { model: env.AI_MODEL });
       raw = "Sorry — Polly could not generate a response. Please try again.";
       yield raw;
     }

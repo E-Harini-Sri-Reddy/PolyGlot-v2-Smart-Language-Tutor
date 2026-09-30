@@ -77,60 +77,38 @@ export type StreamHandlers = {
     helpMode?: boolean;
     savedWords?: string[];
     createdAt?: string;
+    replacedMessageId?: string;
   }) => void;
   onError: (message: string) => void;
 };
 
-async function openMessageStream(
-  conversationId: string,
-  content: string,
+async function authorizedFetch(
+  path: string,
+  init: RequestInit,
   signal?: AbortSignal,
 ) {
-  return fetch(`/api/chat/conversations/${conversationId}/messages`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${getAccessToken() || ""}`,
-    },
-    body: JSON.stringify({ content, stream: true }),
-    signal,
-  });
+  const doFetch = () =>
+    fetch(path, {
+      ...init,
+      credentials: "include",
+      signal,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${getAccessToken() || ""}`,
+        ...(init.headers || {}),
+      },
+    });
+
+  let response = await doFetch();
+  if (response.status === 401) {
+    const refreshed = await refreshAccessToken();
+    if (refreshed) response = await doFetch();
+  }
+  return response;
 }
 
-export async function streamMessage(
-  conversationId: string,
-  content: string,
-  handlers: StreamHandlers,
-) {
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => controller.abort(), 90_000);
-
-  let response: Response;
-  try {
-    response = await openMessageStream(conversationId, content, controller.signal);
-    if (response.status === 401) {
-      const refreshed = await refreshAccessToken();
-      if (refreshed) {
-        response = await openMessageStream(
-          conversationId,
-          content,
-          controller.signal,
-        );
-      }
-    }
-  } catch (error) {
-    window.clearTimeout(timeoutId);
-    if (error instanceof DOMException && error.name === "AbortError") {
-      handlers.onError("Polly took too long to reply. Please try again.");
-    } else {
-      handlers.onError("We couldn't reach Polly. Please check your connection.");
-    }
-    return;
-  }
-
+async function consumeSseStream(response: Response, handlers: StreamHandlers) {
   if (!response.ok) {
-    window.clearTimeout(timeoutId);
     let detail = "We couldn't reach Polly. Please try again.";
     try {
       const body = (await response.json()) as { message?: string };
@@ -146,7 +124,6 @@ export async function streamMessage(
   }
 
   if (!response.body) {
-    window.clearTimeout(timeoutId);
     handlers.onError("We couldn't reach Polly. Please try again.");
     return;
   }
@@ -183,6 +160,7 @@ export async function streamMessage(
                   correction: TutorCorrection | null;
                   helpMode?: boolean;
                   createdAt?: string;
+                  replacedMessageId?: string;
                 };
           };
 
@@ -218,11 +196,8 @@ export async function streamMessage(
       handlers.onError("Connection to Polly was interrupted. Please try again.");
     }
     return;
-  } finally {
-    window.clearTimeout(timeoutId);
   }
 
-  // Critical for Render: stream can close after a proxy timeout with no done event
   if (!receivedDone) {
     if (sawTokens) {
       handlers.onError(
@@ -231,5 +206,60 @@ export async function streamMessage(
     } else {
       handlers.onError("We couldn't reach Polly. Please try again.");
     }
+  }
+}
+
+export async function streamMessage(
+  conversationId: string,
+  content: string,
+  handlers: StreamHandlers,
+) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 90_000);
+
+  try {
+    const response = await authorizedFetch(
+      `/api/chat/conversations/${conversationId}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({ content, stream: true }),
+      },
+      controller.signal,
+    );
+    await consumeSseStream(response, handlers);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      handlers.onError("Polly took too long to reply. Please try again.");
+    } else {
+      handlers.onError("We couldn't reach Polly. Please check your connection.");
+    }
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
+export async function regenerateMessage(
+  conversationId: string,
+  messageId: string,
+  handlers: StreamHandlers,
+) {
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), 90_000);
+
+  try {
+    const response = await authorizedFetch(
+      `/api/chat/conversations/${conversationId}/messages/${messageId}/regenerate`,
+      { method: "POST" },
+      controller.signal,
+    );
+    await consumeSseStream(response, handlers);
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") {
+      handlers.onError("Polly took too long to reply. Please try again.");
+    } else {
+      handlers.onError("We couldn't reach Polly. Please check your connection.");
+    }
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }

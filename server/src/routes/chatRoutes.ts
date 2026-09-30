@@ -33,6 +33,11 @@ chatRoutes.post(
   asyncHandler(chatController.sendMessage),
 );
 chatRoutes.post(
+  "/conversations/:id/messages/:messageId/regenerate",
+  chatLimiter,
+  asyncHandler(chatController.regenerateMessage),
+);
+chatRoutes.post(
   "/conversations/:id/end",
   asyncHandler(chatController.endConversation),
 );

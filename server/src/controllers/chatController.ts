@@ -61,4 +61,11 @@ export const chatController = {
     const result = await chatService.deleteConversation(userId, conversationId);
     res.json({ success: true, ...result });
   },
+
+  async regenerateMessage(req: Request, res: Response) {
+    const userId = (req as Request & { user: { id: string } }).user.id;
+    const conversationId = String(req.params.id);
+    const messageId = String(req.params.messageId);
+    await chatService.regenerateMessage(userId, conversationId, messageId, res);
+  },
 };

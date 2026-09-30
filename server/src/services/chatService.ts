@@ -364,4 +364,145 @@ export const chatService = {
       },
     };
   },
+
+  async regenerateMessage(
+    userId: string,
+    conversationId: string,
+    assistantMessageId: string,
+    res: Response,
+  ) {
+    const conversation = await conversationRepository.findByIdForUser(
+      conversationId,
+      userId,
+    );
+    if (!conversation) {
+      throw new AppError(404, "CONVERSATION_NOT_FOUND", "Conversation not found.");
+    }
+
+    const target = await messageRepository.findById(assistantMessageId);
+    if (
+      !target ||
+      target.role !== "assistant" ||
+      String(target.conversationId) !== conversationId
+    ) {
+      throw new AppError(404, "MESSAGE_NOT_FOUND", "Assistant message not found.");
+    }
+
+    const allMessages = await messageRepository.listByConversation(conversationId, 200);
+    const targetIndex = allMessages.findIndex(
+      (m) => m._id.toString() === assistantMessageId,
+    );
+    if (targetIndex < 0) {
+      throw new AppError(404, "MESSAGE_NOT_FOUND", "Assistant message not found.");
+    }
+
+    let userContent = "";
+    for (let i = targetIndex - 1; i >= 0; i -= 1) {
+      if (allMessages[i]?.role === "user") {
+        userContent = allMessages[i]!.content;
+        break;
+      }
+    }
+    if (!userContent.trim()) {
+      throw new AppError(
+        400,
+        "NO_USER_TURN",
+        "Cannot regenerate without a preceding user message.",
+      );
+    }
+
+    await messageRepository.deleteById(assistantMessageId);
+
+    const user = await userRepository.findById(userId);
+    const settings = await userSettingsRepository.findByUserId(userId);
+    const memory = await memoryBuilder.buildForUser(
+      userId,
+      conversation.language as SupportedLanguage,
+    );
+
+    const historyDocs = await messageRepository.listRecent(conversationId, 25);
+    const history = historyDocs
+      .filter((m) => m.role === "user" || m.role === "assistant")
+      .map((m) => ({
+        role: m.role as "user" | "assistant",
+        content: m.content,
+      }));
+
+    const helpMode = aiService.isHelpRequest(userContent);
+    const replyInput = {
+      language: conversation.language as SupportedLanguage,
+      level: (conversation.level as ProficiencyLevel) || "Beginner",
+      scenario: conversation.scenarioText || undefined,
+      history,
+      learnerName: user?.name,
+      learnerPronouns: user?.pronouns || undefined,
+      tutorPersonality:
+        (settings?.tutorPersonality as TutorPersonality) || "Friendly Teacher",
+      helpRequested: helpMode,
+      memoryBlock: memory.memoryBlock,
+    };
+
+    res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+    res.setHeader("Cache-Control", "no-cache, no-transform");
+    res.setHeader("Connection", "keep-alive");
+    res.setHeader("X-Accel-Buffering", "no");
+    res.flushHeaders?.();
+
+    const writeEvent = (payload: unknown) => {
+      res.write(`data: ${JSON.stringify(payload)}\n\n`);
+      (res as Response & { flush?: () => void }).flush?.();
+    };
+
+    try {
+      const iterator = aiService.streamReply(replyInput)[Symbol.asyncIterator]();
+      let step = await iterator.next();
+      while (!step.done) {
+        const chunk = step.value;
+        if (chunk) writeEvent({ type: "token", content: chunk });
+        step = await iterator.next();
+      }
+
+      const parsed = step.value;
+      const { assistantMessage, savedWords } = await persistAssistantTurn({
+        userId,
+        conversationId,
+        conversation,
+        dialogue: parsed.dialogue,
+        correction: parsed.correction,
+        helpMode,
+        userMessage: userContent,
+      });
+
+      writeEvent({
+        type: "done",
+        message: {
+          id: assistantMessage._id.toString(),
+          role: "assistant",
+          content: parsed.dialogue,
+          correction: parsed.correction,
+          helpMode,
+          savedWords,
+          createdAt: assistantMessage.createdAt,
+          replacedMessageId: assistantMessageId,
+        },
+      });
+      res.end();
+    } catch (error) {
+      console.error("Regenerate chat failed:", error);
+      try {
+        writeEvent({
+          type: "error",
+          message:
+            error instanceof Error
+              ? error.message
+              : "Polly could not regenerate a response.",
+        });
+      } catch {
+        // ignore
+      }
+      res.end();
+    }
+
+    return null;
+  },
 };

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
-import { BookmarkPlus, ChevronDown, Volume2, X } from "lucide-react";
+import { BookmarkPlus, ChevronDown, RefreshCw, Volume2, X } from "lucide-react";
 import type { ChatMessage } from "../../../types";
 import {
   SPEECH_LANG_MAP,
@@ -177,10 +177,14 @@ export function MessageBubble({
   message,
   language,
   streaming = false,
+  onRegenerate,
+  regenerating = false,
 }: {
   message: ChatMessage;
   language: SupportedLanguage;
   streaming?: boolean;
+  onRegenerate?: (messageId: string) => void;
+  regenerating?: boolean;
 }) {
   const correction =
     message.correction ||
@@ -204,7 +208,7 @@ export function MessageBubble({
   const knownMeanings = useMemo(() => buildKnownMeanings(message), [message]);
   const isUser = message.role === "user";
   const useScriptLayout =
-    !isUser && !message.helpMode && isNonLatinLanguage(language);
+    !isUser && !streaming && !message.helpMode && isNonLatinLanguage(language);
 
   const fallbackSegments = useMemo(
     () => tokenizeForSave(message.content || "", language),
@@ -321,7 +325,28 @@ export function MessageBubble({
           </div>
         )}
 
-        {!isUser && useScriptLayout ? (
+        {!isUser && streaming ? (
+          <div className="text-sm leading-relaxed text-ink" aria-live="polite">
+            {message.content?.trim() ? (
+              <p className="whitespace-pre-wrap">
+                {message.content}
+                <span
+                  className="ml-0.5 inline-block h-4 w-[2px] translate-y-[2px] animate-pulse bg-sea align-middle"
+                  aria-hidden
+                />
+              </p>
+            ) : (
+              <p
+                className="flex items-center gap-1.5 py-0.5 text-2xl leading-none tracking-[0.2em] text-ink-soft"
+                aria-label="Polly is typing"
+              >
+                <span className="inline-block animate-bounce [animation-delay:-0.3s]">.</span>
+                <span className="inline-block animate-bounce [animation-delay:-0.15s]">.</span>
+                <span className="inline-block animate-bounce">.</span>
+              </p>
+            )}
+          </div>
+        ) : !isUser && useScriptLayout ? (
           <div>
             {pickMode && (
               <p className="mb-2 text-xs text-ink-soft">
@@ -382,7 +407,7 @@ export function MessageBubble({
           />
         )}
 
-        {!isUser && !streaming && (
+        {!isUser && !streaming && Boolean(message.content?.trim()) && (
           <div className="mt-2 flex flex-wrap items-center justify-end gap-2">
             {message.helpMode && (
               <span className="rounded-full bg-sand px-2 py-1 text-xs text-ink-soft">
@@ -435,6 +460,20 @@ export function MessageBubble({
               <Volume2 className="h-3.5 w-3.5" />
               Listen
             </button>
+            {onRegenerate && (
+              <button
+                type="button"
+                title="New response"
+                disabled={regenerating}
+                onClick={() => onRegenerate(message.id)}
+                className="inline-flex items-center gap-1 rounded-full bg-foam px-2.5 py-1 text-xs text-ink-soft hover:text-ink disabled:opacity-50"
+              >
+                <RefreshCw
+                  className={`h-3.5 w-3.5 ${regenerating ? "animate-spin" : ""}`}
+                />
+                New response
+              </button>
+            )}
           </div>
         )}
       </div>
