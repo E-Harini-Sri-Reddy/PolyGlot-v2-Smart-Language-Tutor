@@ -33,7 +33,7 @@ async function bootstrap() {
 
   app.use("/api", apiRouter);
 
-  const distPath = path.join(__dirname, "../../../dist");
+  const distPath = path.join(__dirname, "../../dist");
   app.use(express.static(distPath));
   app.get("*", (req, res, next) => {
     if (req.path.startsWith("/api")) {
