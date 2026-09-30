@@ -3,6 +3,16 @@ import { z } from "zod";
 
 dotenv.config();
 
+/** Groq retired several Llama IDs in Aug 2026 — remap so old .env / Render vars keep working. */
+const DEPRECATED_AI_MODELS: Record<string, string> = {
+  "llama-3.1-8b-instant": "openai/gpt-oss-20b",
+  "llama-3.3-70b-versatile": "openai/gpt-oss-120b",
+  "llama3-8b-8192": "openai/gpt-oss-20b",
+  "llama3-70b-8192": "openai/gpt-oss-120b",
+  "gemma2-9b-it": "openai/gpt-oss-20b",
+  "mixtral-8x7b-32768": "openai/gpt-oss-20b",
+};
+
 const envSchema = z.object({
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(["development", "production", "test"]).default("development"),
@@ -31,4 +41,16 @@ if (!parsed.success) {
   process.exit(1);
 }
 
-export const env = parsed.data;
+const rawModel = parsed.data.AI_MODEL.trim();
+const resolvedModel = DEPRECATED_AI_MODELS[rawModel] || rawModel;
+
+if (DEPRECATED_AI_MODELS[rawModel]) {
+  console.warn(
+    `[AI] Model "${rawModel}" is deprecated on Groq. Using "${resolvedModel}" instead. Update AI_MODEL in .env / Render.`,
+  );
+}
+
+export const env = {
+  ...parsed.data,
+  AI_MODEL: resolvedModel,
+};

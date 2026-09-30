@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import type { CookieOptions } from "express";
 import { authService } from "../services/authService.js";
 import { AppError } from "../utils/errors.js";
 import {
@@ -12,18 +13,24 @@ import { env } from "../config/env.js";
 
 const REFRESH_COOKIE = "polyglot_refresh";
 
-function setRefreshCookie(res: Response, refreshToken: string) {
-  res.cookie(REFRESH_COOKIE, refreshToken, {
+function refreshCookieOptions(): CookieOptions {
+  const isProd = env.NODE_ENV === "production";
+  return {
     httpOnly: true,
-    secure: env.NODE_ENV === "production",
-    sameSite: "lax",
+    secure: isProd,
+    // Same-site for same-origin Render deploys; "none" only needed for split domains
+    sameSite: isProd ? "lax" : "lax",
     maxAge: 7 * 24 * 60 * 60 * 1000,
     path: "/api/auth",
-  });
+  };
+}
+
+function setRefreshCookie(res: Response, refreshToken: string) {
+  res.cookie(REFRESH_COOKIE, refreshToken, refreshCookieOptions());
 }
 
 function clearRefreshCookie(res: Response) {
-  res.clearCookie(REFRESH_COOKIE, { path: "/api/auth" });
+  res.clearCookie(REFRESH_COOKIE, refreshCookieOptions());
 }
 
 export const authController = {

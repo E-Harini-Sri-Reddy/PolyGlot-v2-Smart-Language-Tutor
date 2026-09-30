@@ -24,7 +24,8 @@ export type GenerateReplyInput = PromptBuildInput & {
 };
 
 const CORRECTION_NOTE = `CORRECTIONS (mandatory when applicable):
-If the learner's latest message has a clear mistake — wrong conjugation, wrong particle, broken word order, missing words, misspelled/broken romaji (e.g. "ki mashita" for kimashita), or unnatural beginner form — you MUST emit a <<<CORRECTION>>> ... <<<END>>> block BEFORE the dialogue.
+Write the spoken dialogue FIRST (so the learner sees it stream in immediately).
+THEN, if the learner's latest message has a clear mistake — wrong conjugation, wrong particle, broken word order, missing words, misspelled/broken romaji, or unnatural beginner form — emit a <<<CORRECTION>>> ... <<<END>>> block AFTER the dialogue.
 Do NOT skip the correction block just to keep chatting.
 Do NOT correct Polly's own lines.
 Do NOT correct clear, acceptable greetings/introductions with no real error.
@@ -360,15 +361,39 @@ Keep all other sections unchanged. Return the FULL help markdown.`,
   }
 }
 
+async function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(fallback), ms);
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 async function finalizeReply(
   input: GenerateReplyInput,
   parsed: ParsedAiReply,
   helpRequested: boolean,
   lastUserMessage?: string,
+  options?: { fast?: boolean },
 ): Promise<ParsedAiReply> {
+  const fast = Boolean(options?.fast);
+  // Keep post-stream work short on Render (proxy idle timeouts)
+  const repairBudgetMs = fast ? 6000 : 12000;
+  const correctionBudgetMs = fast ? 4000 : 8000;
+
   if (helpRequested) {
     let dialogue = ensureHelpHasEnglish(parsed.dialogue);
-    dialogue = await repairHelpEnglish(dialogue, input.language);
+    dialogue = await withTimeout(
+      repairHelpEnglish(dialogue, input.language),
+      repairBudgetMs,
+      dialogue,
+    );
     return { ...parsed, dialogue, correction: null };
   }
 
@@ -380,35 +405,45 @@ async function finalizeReply(
   const answerBad = needsAnswerFirstRepair(lastUserMessage, dialogue);
 
   if (scriptBad || brevityBad || answerBad) {
-    dialogue = await repairDialogue({
-      language: input.language,
-      level: input.level,
+    dialogue = await withTimeout(
+      repairDialogue({
+        language: input.language,
+        level: input.level,
+        dialogue,
+        learnerName: input.learnerName,
+        lastUserMessage,
+        reason: scriptBad && brevityBad ? "both" : scriptBad ? "script" : "brevity",
+      }),
+      repairBudgetMs,
       dialogue,
-      learnerName: input.learnerName,
-      lastUserMessage,
-      reason: scriptBad && brevityBad ? "both" : scriptBad ? "script" : "brevity",
-    });
+    );
   }
 
-  // Dedicated romanization pass if still missing
   if (
     NON_LATIN_LANGUAGES.includes(input.language) &&
     hasNativeScript(input.language, dialogue) &&
     !hasRomanizationText(dialogue)
   ) {
-    dialogue = await addRomanization({
-      language: input.language,
+    dialogue = await withTimeout(
+      addRomanization({ language: input.language, dialogue }),
+      Math.min(repairBudgetMs, 5000),
       dialogue,
-    });
+    );
   }
 
-  if (lastUserMessage) {
-    correction = await ensureCorrection({
-      language: input.language,
-      level: input.level,
-      learnerMessage: lastUserMessage,
-      existing: correction,
-    });
+  // On the streaming/fast path, skip the extra correction round-trip to beat proxy timeouts.
+  // The primary model reply already includes <<<CORRECTION>>> when needed.
+  if (lastUserMessage && !fast) {
+    correction = await withTimeout(
+      ensureCorrection({
+        language: input.language,
+        level: input.level,
+        learnerMessage: lastUserMessage,
+        existing: correction,
+      }),
+      correctionBudgetMs,
+      correction,
+    );
   }
 
   return { ...parsed, dialogue, correction };
@@ -524,6 +559,7 @@ export const aiService = {
       parseAiReply(raw),
       helpRequested,
       lastUser?.content,
+      { fast: true },
     );
   },
 };

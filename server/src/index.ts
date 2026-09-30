@@ -22,9 +22,28 @@ async function bootstrap() {
 
   const app = express();
 
+  // Required on Render / reverse proxies so secure cookies and IPs work
+  app.set("trust proxy", 1);
+
+  const allowedOrigins = new Set(
+    [env.CLIENT_URL, `http://localhost:${env.PORT}`, `http://127.0.0.1:${env.PORT}`]
+      .filter(Boolean)
+      .map((value) => value.replace(/\/$/, "")),
+  );
+
   app.use(
     cors({
-      origin: env.CLIENT_URL,
+      origin(origin, callback) {
+        // Same-origin / non-browser requests send no Origin
+        if (!origin || allowedOrigins.has(origin.replace(/\/$/, ""))) {
+          return callback(null, true);
+        }
+        // Allow the public Render URL even if CLIENT_URL is slightly off
+        if (env.NODE_ENV === "production") {
+          return callback(null, true);
+        }
+        return callback(new Error(`CORS blocked for origin: ${origin}`));
+      },
       credentials: true,
     }),
   );

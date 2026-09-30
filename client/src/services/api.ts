@@ -41,7 +41,7 @@ async function parseJson(response: Response) {
 
 let refreshPromise: Promise<string | null> | null = null;
 
-async function refreshAccessToken(): Promise<string | null> {
+export async function refreshAccessToken(): Promise<string | null> {
   if (!refreshPromise) {
     refreshPromise = (async () => {
       const response = await fetch("/api/auth/refresh", {
@@ -49,7 +49,6 @@ async function refreshAccessToken(): Promise<string | null> {
         credentials: "include",
       });
       if (!response.ok) {
-        setAccessToken(null);
         return null;
       }
       const data = (await response.json()) as { accessToken?: string };
@@ -63,6 +62,10 @@ async function refreshAccessToken(): Promise<string | null> {
     });
   }
   return refreshPromise;
+}
+
+function isAuthRefreshPath(path: string) {
+  return path.includes("/auth/refresh");
 }
 
 export async function apiFetch<T>(
@@ -86,7 +89,15 @@ export async function apiFetch<T>(
     credentials: "include",
   });
 
-  if (response.status === 401 && retry && !path.includes("/auth/login")) {
+  // Never recursively refresh the refresh endpoint (causes double 401 noise)
+  if (
+    response.status === 401 &&
+    retry &&
+    !path.includes("/auth/login") &&
+    !path.includes("/auth/register") &&
+    !path.includes("/auth/google") &&
+    !isAuthRefreshPath(path)
+  ) {
     const refreshed = await refreshAccessToken();
     if (refreshed) {
       return apiFetch<T>(path, init, false);

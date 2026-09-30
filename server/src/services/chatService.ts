@@ -276,34 +276,41 @@ export const chatService = {
     };
 
     if (res) {
-      res.setHeader("Content-Type", "text/event-stream");
-      res.setHeader("Cache-Control", "no-cache");
+      res.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+      res.setHeader("Cache-Control", "no-cache, no-transform");
       res.setHeader("Connection", "keep-alive");
+      res.setHeader("X-Accel-Buffering", "no");
       res.flushHeaders?.();
 
-      let iterator = aiService.streamReply(replyInput)[Symbol.asyncIterator]();
-      let step = await iterator.next();
-      while (!step.done) {
-        const chunk = step.value;
-        if (chunk) {
-          res.write(`data: ${JSON.stringify({ type: "token", content: chunk })}\n\n`);
+      const writeEvent = (payload: unknown) => {
+        res.write(`data: ${JSON.stringify(payload)}\n\n`);
+        // Flush through proxies when compression/buffering is present
+        (res as Response & { flush?: () => void }).flush?.();
+      };
+
+      try {
+        const iterator = aiService.streamReply(replyInput)[Symbol.asyncIterator]();
+        let step = await iterator.next();
+        while (!step.done) {
+          const chunk = step.value;
+          if (chunk) {
+            writeEvent({ type: "token", content: chunk });
+          }
+          step = await iterator.next();
         }
-        step = await iterator.next();
-      }
 
-      const parsed = step.value;
-      const { assistantMessage, savedWords } = await persistAssistantTurn({
-        userId,
-        conversationId,
-        conversation,
-        dialogue: parsed.dialogue,
-        correction: parsed.correction,
-        helpMode,
-        userMessage: content,
-      });
+        const parsed = step.value;
+        const { assistantMessage, savedWords } = await persistAssistantTurn({
+          userId,
+          conversationId,
+          conversation,
+          dialogue: parsed.dialogue,
+          correction: parsed.correction,
+          helpMode,
+          userMessage: content,
+        });
 
-      res.write(
-        `data: ${JSON.stringify({
+        writeEvent({
           type: "done",
           message: {
             id: assistantMessage._id.toString(),
@@ -314,9 +321,23 @@ export const chatService = {
             savedWords,
             createdAt: assistantMessage.createdAt,
           },
-        })}\n\n`,
-      );
-      res.end();
+        });
+        res.end();
+      } catch (error) {
+        console.error("Streaming chat failed:", error);
+        try {
+          writeEvent({
+            type: "error",
+            message:
+              error instanceof Error
+                ? error.message
+                : "Polly could not generate a response.",
+          });
+        } catch {
+          // response may already be closed
+        }
+        res.end();
+      }
       return null;
     }
 

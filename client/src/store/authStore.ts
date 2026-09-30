@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import { apiFetch, setAccessToken, type AuthResponse } from "../services/api";
+import {
+  apiFetch,
+  getAccessToken,
+  setAccessToken,
+  type AuthResponse,
+} from "../services/api";
 import type { PublicUser } from "../types";
 
 type AuthState = {
@@ -32,12 +37,28 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   bootstrap: async () => {
     try {
+      // Prefer refresh cookie when present
       const refreshed = await apiFetch<AuthResponse>("/api/auth/refresh", {
         method: "POST",
       });
       get().setSession(refreshed.accessToken, refreshed.user);
     } catch {
-      get().clearSession();
+      // If refresh cookie is missing/expired, fall back to stored access token
+      const existing = getAccessToken();
+      if (existing) {
+        try {
+          const me = await apiFetch<{ success: boolean; user: PublicUser }>(
+            "/api/auth/me",
+            {},
+            false,
+          );
+          get().setSession(existing, me.user);
+        } catch {
+          get().clearSession();
+        }
+      } else {
+        get().clearSession();
+      }
     } finally {
       set({ bootstrapped: true });
     }
