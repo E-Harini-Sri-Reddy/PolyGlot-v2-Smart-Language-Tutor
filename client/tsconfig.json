@@ -4,7 +4,6 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx",
     "noEmit": true,
-    "types": ["vite/client"],
     "module": "ESNext",
     "moduleResolution": "Bundler",
     "allowImportingTsExtensions": true,
@@ -14,5 +13,8 @@
       "@/*": ["./src/*"]
     }
   },
-  "include": ["src/**/*", "vite.config.ts"]
+  "include": [
+    "src/**/*",
+    "vite.config.ts"
+  ]
 }
