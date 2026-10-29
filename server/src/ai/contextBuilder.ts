@@ -20,6 +20,7 @@ export type ParsedAiReply = {
 
 const CORRECTION_REGEX =
   /<<<\s*CORRECTION\s*>>>\s*([\s\S]*?)\s*<<<\s*END\s*>>>/i;
+const CORRECTION_OPEN_REGEX = /<<<\s*CORRECTION\s*>>>/i;
 
 function extractJsonObject(text: string): string | null {
   const start = text.indexOf("{");
@@ -220,13 +221,28 @@ export function buildChatContext(params: {
 }
 
 export function parseAiReply(raw: string): ParsedAiReply {
-  const match = raw.match(CORRECTION_REGEX);
-  if (!match) {
-    return { dialogue: raw.trim(), correction: null, raw };
+  let payload = "";
+  let dialogue = raw;
+
+  const closed = raw.match(CORRECTION_REGEX);
+  if (closed) {
+    payload = closed[1]!.trim();
+    dialogue = raw.replace(CORRECTION_REGEX, "");
+  } else {
+    const openIdx = raw.search(CORRECTION_OPEN_REGEX);
+    if (openIdx >= 0) {
+      const after = raw.slice(openIdx).replace(CORRECTION_OPEN_REGEX, "");
+      payload = (extractJsonObject(after) || after).trim();
+      dialogue = raw.slice(0, openIdx);
+    }
   }
 
-  const payload = match[1]!.trim();
-  const correction = parseCorrectionPayload(payload);
-  const dialogue = raw.replace(CORRECTION_REGEX, "").trim();
+  dialogue = dialogue
+    .replace(/<<<\s*CORRECTION\s*>>>[\s\S]*$/gi, "")
+    .replace(/<<<\s*END\s*>>>/gi, "")
+    .replace(/\n?\s*\{\s*"\s*encourage\s*"\s*:[\s\S]*$/i, "")
+    .trim();
+
+  const correction = payload ? parseCorrectionPayload(payload) : null;
   return { dialogue, correction, raw };
 }

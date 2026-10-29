@@ -1,0 +1,9 @@
+process.env.PORT ||= "3001";
+process.env.NODE_ENV ||= "test";
+process.env.CLIENT_URL ||= "http://localhost:5173";
+process.env.AI_URL ||= "http://127.0.0.1:9";
+process.env.AI_MODEL ||= "test-model";
+process.env.AI_KEY ||= "test-key";
+process.env.MONGODB_URI ||= "mongodb://127.0.0.1:27017/polyglot-test";
+process.env.JWT_ACCESS_SECRET ||= "test-access-secret-key";
+process.env.JWT_REFRESH_SECRET ||= "test-refresh-secret-key";

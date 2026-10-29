@@ -8,6 +8,7 @@ import {
   loginSchema,
   registerSchema,
   resetPasswordSchema,
+  restoreAccountSchema,
 } from "../validators/authValidators.js";
 import { env } from "../config/env.js";
 
@@ -106,5 +107,16 @@ export const authController = {
     const body = resetPasswordSchema.parse(req.body);
     const result = await authService.resetPassword(body.token, body.password);
     res.json({ success: true, ...result });
+  },
+
+  async restoreAccount(req: Request, res: Response) {
+    const body = restoreAccountSchema.parse(req.body);
+    const result = await authService.restoreAccount(body);
+    setRefreshCookie(res, result.refreshToken);
+    res.json({
+      success: true,
+      accessToken: result.accessToken,
+      user: result.user,
+    });
   },
 };

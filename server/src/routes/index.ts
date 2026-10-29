@@ -6,6 +6,7 @@ import { learningRoutes } from "./learningRoutes.js";
 import { scenarioRoutes } from "./scenarioRoutes.js";
 import { quizRoutes } from "./quizRoutes.js";
 import { settingsRoutes } from "./settingsRoutes.js";
+import { accountRoutes } from "./accountRoutes.js";
 import {
   SUPPORTED_LANGUAGES,
   PROFICIENCY_LEVELS,
@@ -34,3 +35,4 @@ apiRouter.use("/learning", learningRoutes);
 apiRouter.use("/scenarios", scenarioRoutes);
 apiRouter.use("/quizzes", quizRoutes);
 apiRouter.use("/settings", settingsRoutes);
+apiRouter.use("/account", accountRoutes);

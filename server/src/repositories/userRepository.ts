@@ -13,6 +13,13 @@ export const userRepository = {
     return User.findOne({ googleId });
   },
 
+  findPendingDeletionDue(now = new Date()) {
+    return User.find({
+      accountStatus: "pending_deletion",
+      deletionPurgeAt: { $lte: now },
+    });
+  },
+
   create(data: {
     name: string;
     email: string;

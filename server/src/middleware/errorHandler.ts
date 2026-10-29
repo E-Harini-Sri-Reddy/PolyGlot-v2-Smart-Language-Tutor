@@ -8,11 +8,15 @@ export function errorHandler(
   _next: NextFunction,
 ) {
   if (isAppError(err)) {
-    return res.status(err.statusCode).json({
+    const body: Record<string, unknown> = {
       success: false,
       code: err.code,
       message: err.message,
-    });
+    };
+    if ("purgeAt" in err.details) {
+      body.purgeAt = err.details.purgeAt;
+    }
+    return res.status(err.statusCode).json(body);
   }
 
   console.error(err);

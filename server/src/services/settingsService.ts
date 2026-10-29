@@ -78,6 +78,7 @@ export const settingsService = {
       dailyGoalMinutes: input.dailyGoalMinutes,
       tutorPersonality: input.tutorPersonality,
       preferredTopics: input.preferredTopics,
+      showEnglishUnderReplies: Boolean(input.showEnglishUnderReplies),
     });
 
     user.onboardingCompleted = true;
@@ -91,6 +92,7 @@ export const settingsService = {
         avatarUrl: user.avatarUrl ?? null,
         onboardingCompleted: true,
         pronouns: user.pronouns ?? "",
+        hasPassword: Boolean(user.passwordHash),
       },
       settings: toPublicSettings(
         await userSettingsRepository.findByUserId(userId),

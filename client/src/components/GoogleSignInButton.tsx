@@ -1,5 +1,6 @@
 import { useEffect, useRef } from "react";
 import { useAuthStore } from "../store/authStore";
+import { ApiError } from "../services/api";
 
 declare global {
   interface Window {
@@ -22,8 +23,10 @@ declare global {
 
 export function GoogleSignInButton({
   onError,
+  onPendingDeletion,
 }: {
   onError: (message: string) => void;
+  onPendingDeletion?: (info: { purgeAt: string; idToken: string }) => void;
 }) {
   const buttonRef = useRef<HTMLDivElement>(null);
   const googleLogin = useAuthStore((s) => s.googleLogin);
@@ -42,6 +45,18 @@ export function GoogleSignInButton({
           try {
             await googleLogin(response.credential);
           } catch (error) {
+            if (
+              error instanceof ApiError &&
+              error.code === "ACCOUNT_PENDING_DELETION" &&
+              onPendingDeletion
+            ) {
+              onPendingDeletion({
+                purgeAt:
+                  typeof error.details.purgeAt === "string" ? error.details.purgeAt : "",
+                idToken: response.credential,
+              });
+              return;
+            }
             onError(
               error instanceof Error
                 ? error.message
@@ -74,7 +89,7 @@ export function GoogleSignInButton({
     return () => {
       cancelled = true;
     };
-  }, [clientId, googleLogin, onError]);
+  }, [clientId, googleLogin, onError, onPendingDeletion]);
 
   if (!clientId) {
     return (

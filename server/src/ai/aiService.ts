@@ -26,11 +26,12 @@ export type GenerateReplyInput = PromptBuildInput & {
 const CORRECTION_NOTE = `CORRECTIONS (mandatory when applicable):
 Write the spoken dialogue FIRST (so the learner sees it stream in immediately).
 THEN, if the learner's latest message has a clear mistake — wrong conjugation, wrong particle, broken word order, missing words, misspelled/broken romaji, or unnatural beginner form — emit a <<<CORRECTION>>> ... <<<END>>> block AFTER the dialogue.
+Always close the block with <<<END>>>. If you omit <<<END>>>, the correction will leak into the chat.
 Do NOT skip the correction block just to keep chatting.
 Do NOT correct Polly's own lines.
 Do NOT correct clear, acceptable greetings/introductions with no real error.
 When correcting, include encourage, corrected, translation, wordByWord, explain, and why as valid JSON (exact key names, no spaces inside quotes around keys).
-Never put raw JSON into the dialogue text.`;
+Never put raw JSON or <<<CORRECTION>>> text into the spoken dialogue.`;
 
 function turnTakingNote(learnerName?: string, lastUserMessage?: string): string {
   const name = learnerName?.trim() || "the learner";
@@ -50,10 +51,7 @@ function scriptFormatNote(
   showEnglishUnderReplies?: boolean,
 ): string {
   if (!NON_LATIN_LANGUAGES.includes(language)) {
-    if (!showEnglishUnderReplies) return "";
-    const name = learnerName?.trim() || "the learner";
-    return `ENGLISH GLOSS (enabled): After the ${language} dialogue, add one plain English translation line.
-No labels like "English:". You are Polly; call the learner ${name}.`;
+    return "";
   }
   const name = learnerName?.trim() || "the learner";
   if (showEnglishUnderReplies) {
@@ -96,54 +94,99 @@ function extractMessageText(message: {
   return completionText(message?.reasoning).trim();
 }
 
-function hasRomanizationText(text: string): boolean {
+function hasRomanizationText(text: string, language?: SupportedLanguage): boolean {
   const lines = text.split(/\n/).map((line) => line.trim()).filter(Boolean);
   return lines.some((line) => {
     if (/[\u3040-\u9fff\uac00-\ud7af\u0600-\u06ff\u0900-\u097f]/.test(line)) {
       return false;
     }
-    if (looksLikeEnglishGloss(line)) return false;
+    if (looksLikeEnglishGloss(line, language)) return false;
     return /[A-Za-zÀ-ÿĀ-žāīūēō]/.test(line);
   });
 }
 
-function looksLikeEnglishGloss(text: string): boolean {
+function romanizationMarker(language?: SupportedLanguage): RegExp | null {
+  switch (language) {
+    case "Japanese":
+      return /\b(wa|ga|wo|o|ni|de|to|mo|ka|yo|ne|desu|masu|mashita|masen|kudasai|san|watashi|anata|konnichiwa|arigatou|kore|sore|doko|nani|genki|imasu)\b|[āīūēōĀĪŪĒŌ]/i;
+    case "Korean":
+      return /\b(annyeong|haseyo|hamnida|seumnida|imnida|jinaeyo|gomawo|jeoneun|ireum|eoseo|hwanyeong|yeyo|ayo|eyo|eun|neun|eul|reul|eseo|nida)\b/i;
+    case "Hindi":
+      return /\b(hai|hain|hoon|hun|aap|main|mein|kya|kaise|kahan|namaste|ka|ki|ke|se|ko|par|raha|rahi|nahi|ji|aur|mera|meri|naam|swagat|mujhe|tum|hum)\b/i;
+    case "Chinese":
+      return /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜü]|(\b(nǐ|wǒ|hǎo|shì|ma|ne|le)\b)/i;
+    case "Arabic":
+      return /\b(marhaba|marhaban|kayfa|haluk|ismi|anta|anti|shukran|ahlan|ismee)\b/i;
+    default:
+      return /\b(wa|ga|desu|masu|watashi|kahan|hoon|aap|hai|se|main|namaskar|mera|naam|porī|annyeong|haseyo|hamnida|eun|neun)\b|[āīūēō]/i;
+  }
+}
+
+function looksLikeEnglishGloss(text: string, language?: SupportedLanguage): boolean {
   const trimmed = text.trim().replace(/^English\s*:\s*/i, "");
   if (!trimmed) return false;
   if (/[\u3040-\u9fff\uac00-\ud7af\u0600-\u06ff\u0900-\u097f]/.test(trimmed)) {
     return false;
   }
-  if (/[āīūēō]/.test(trimmed)) return false;
-  // Romaji/Hinglish markers — not English gloss
+  if (/[āīūēōĀĪŪĒŌ]/.test(trimmed)) return false;
+  if (((trimmed.match(/-/g) || []).length >= 2) || /[A-Z]{2,}[a-z]*-/.test(trimmed)) {
+    return false; // phonetic respelling, not an English translation
+  }
+  const marker = romanizationMarker(language);
+
+  const functionHits =
+    trimmed.match(
+      /\b(the|and|or|but|with|from|that|this|what|where|which|when|why|who|how|you|your|i'm|we|they|she|he|is|are|was|were|have|has|do|does|did|hello|welcome|please|thanks|thank|yes|no|sorry|great|nice|because|about|like|want|for|our|my|me)\b/gi,
+    )?.length ?? 0;
+  const words = trimmed.split(/\s+/).filter(Boolean);
+
   if (
-    /\b(wa|ga|desu|masu|watashi|kahan|hoon|aap|hai|se|main|namaskar|mera|naam|porī)\b/i.test(
+    /^(hello|hi|hey|welcome|thanks|thank you|please|sorry|yes|no|great|nice|my name)\b/i.test(
+      trimmed,
+    )
+  ) {
+    return true;
+  }
+
+  // English prose wins even if the line contains Polly/Buli/Polli
+  if (functionHits >= 2 && words.length >= 3) return true;
+
+  if (marker?.test(trimmed)) return false;
+
+  return (
+    (/^(i |i'm |i am |you |we |they |he |she |it |this |that |what |where |which |how |who |when |why |do |does |did |are |is |am |from |the |a |an |yes |no |hi |hello |nice |great |sorry |please |thank |thanks |welcome |my )/i.test(
       trimmed,
     ) &&
-    trimmed.split(/\s+/).length <= 10
-  ) {
-    return false;
-  }
-  return (
-    /^(i |i'm |i am |you |we |they |he |she |it |this |that |what |where |which |how |who |when |why |do |does |did |are |is |am |from |the |a |an |yes |no |hi |hello |nice |great |sorry )/i.test(
-      trimmed,
-    ) ||
+      functionHits >= 1) ||
     (/^[A-Za-z][A-Za-z0-9 ,'’?.!-]*[.?!]?$/.test(trimmed) &&
-      trimmed.split(/\s+/).length >= 4)
+      words.length >= 4 &&
+      functionHits >= 1)
   );
 }
 
-function hasEnglishGloss(text: string): boolean {
+function stripEnglishGloss(
+  dialogue: string,
+  language: SupportedLanguage,
+): string {
+  return dialogue
+    .split(/\n/)
+    .filter((line) => !looksLikeEnglishGloss(line, language))
+    .join("\n")
+    .trim();
+}
+
+function hasEnglishGloss(text: string, language?: SupportedLanguage): boolean {
   return text
     .split(/\n/)
     .map((line) => line.trim())
     .filter(Boolean)
-    .some((line) => looksLikeEnglishGloss(line));
+    .some((line) => looksLikeEnglishGloss(line, language));
 }
 
 function needsNonLatinRepair(language: SupportedLanguage, dialogue: string): boolean {
   if (!NON_LATIN_LANGUAGES.includes(language)) return false;
   if (!hasNativeScript(language, dialogue)) return true;
-  if (!hasRomanizationText(dialogue)) return true;
+  if (!hasRomanizationText(dialogue, language)) return true;
   if (/\([A-Za-z][^)]{3,}\)/.test(dialogue)) return true;
   if (dialogue.includes("|")) return true;
   if (
@@ -285,15 +328,19 @@ English translation
 
     if (NON_LATIN_LANGUAGES.includes(input.language)) {
       const okNative = hasNativeScript(input.language, repaired);
-      const okRoma = hasRomanizationText(repaired);
+      const okRoma = hasRomanizationText(repaired, input.language);
       if (!okNative) return input.dialogue;
       if (okNative && okRoma) {
-        if (keepEnglish && !hasEnglishGloss(repaired) && hasEnglishGloss(input.dialogue)) {
+        if (
+          keepEnglish &&
+          !hasEnglishGloss(repaired, input.language) &&
+          hasEnglishGloss(input.dialogue, input.language)
+        ) {
           // Keep original English if repair dropped it
           const englishLine = input.dialogue
             .split(/\n/)
             .map((l) => l.trim())
-            .find((l) => looksLikeEnglishGloss(l));
+            .find((l) => looksLikeEnglishGloss(l, input.language));
           return englishLine ? `${repaired.trim()}\n${englishLine}` : repaired;
         }
         return repaired;
@@ -301,11 +348,15 @@ English translation
       return repaired;
     }
 
-    if (keepEnglish && !hasEnglishGloss(repaired) && hasEnglishGloss(input.dialogue)) {
+    if (
+      keepEnglish &&
+      !hasEnglishGloss(repaired, input.language) &&
+      hasEnglishGloss(input.dialogue, input.language)
+    ) {
       const englishLine = input.dialogue
         .split(/\n/)
         .map((l) => l.trim())
-        .find((l) => looksLikeEnglishGloss(l));
+        .find((l) => looksLikeEnglishGloss(l, input.language));
       return englishLine ? `${repaired.trim()}\n${englishLine}` : repaired;
     }
     return repaired;
@@ -315,17 +366,80 @@ English translation
   }
 }
 
-function extractEnglishLinesFromDialogue(dialogue: string): string[] {
+function extractEnglishLinesFromDialogue(
+  dialogue: string,
+  language?: SupportedLanguage,
+): string[] {
   return dialogue
     .split(/\n/)
     .map((line) => line.trim())
-    .filter((line) => looksLikeEnglishGloss(line));
+    .filter((line) => looksLikeEnglishGloss(line, language));
 }
 
-function appendPreservedEnglish(dialogue: string, englishLines: string[]): string {
+function appendPreservedEnglish(
+  dialogue: string,
+  englishLines: string[],
+  language?: SupportedLanguage,
+): string {
   if (!englishLines.length) return dialogue;
-  if (hasEnglishGloss(dialogue)) return dialogue;
+  if (hasEnglishGloss(dialogue, language)) return dialogue;
   return `${dialogue.trim()}\n${englishLines.join("\n")}`.trim();
+}
+
+async function ensureNativeScript(input: {
+  language: SupportedLanguage;
+  dialogue: string;
+  keepEnglish?: boolean;
+}): Promise<string> {
+  if (!NON_LATIN_LANGUAGES.includes(input.language)) return input.dialogue;
+  if (hasNativeScript(input.language, input.dialogue)) return input.dialogue;
+
+  const examples: Record<string, string> = {
+    Japanese:
+      "こんにちは！私はポリーです。\nKonnichiwa! Watashi wa Porī desu.",
+    Korean: "안녕하세요! 저는 폴리예요.\nAnnyeonghaseyo! Jeoneun Polli-yeyo.",
+    Chinese: "你好！我叫波莉。\nNǐ hǎo! Wǒ jiào Bō lì.",
+    Hindi: "नमस्ते! मेरा नाम पोली है।\nNamaste! Mera naam Poli hai.",
+    Arabic: "مرحبًا! اسمي بولي.\nMarhaban! Ismi Buli.",
+  };
+
+  try {
+    const completion = await aiClient.chat.completions.create({
+      model: env.AI_MODEL,
+      temperature: 0,
+      max_completion_tokens: 360,
+      ...(isReasoningModel(env.AI_MODEL) ? { include_reasoning: false } : {}),
+      messages: [
+        {
+          role: "system",
+          content: `The ${input.language} reply below is INVALID because it has no native script — only Latin letters.
+Rewrite it. Line 1 MUST be real ${input.language} script. Latin-only output is wrong.
+Output EXACTLY:
+${examples[input.language] || ""}
+Then match that meaning for this reply.
+${input.keepEnglish ? "You may add a final English line." : "No English translation line."}
+No | characters. No CORRECTION block.`,
+        },
+        { role: "user", content: input.dialogue.slice(0, 1500) },
+      ],
+    } as never);
+
+    const repaired = extractMessageText(
+      (completion as { choices?: Array<{ message?: { content?: unknown } }> })
+        .choices?.[0]?.message,
+    )
+      .trim()
+      .replace(/\|/g, "");
+    if (repaired && hasNativeScript(input.language, repaired)) {
+      return input.keepEnglish
+        ? repaired
+        : stripEnglishGloss(repaired, input.language);
+    }
+    return input.dialogue;
+  } catch (error) {
+    console.error("Native script ensure failed:", error);
+    return input.dialogue;
+  }
 }
 
 /** Focused pass: keep native lines, add romanization underneath. */
@@ -336,10 +450,10 @@ async function addRomanization(input: {
 }): Promise<string> {
   if (!NON_LATIN_LANGUAGES.includes(input.language)) return input.dialogue;
   if (!hasNativeScript(input.language, input.dialogue)) return input.dialogue;
-  if (hasRomanizationText(input.dialogue)) return input.dialogue;
+  if (hasRomanizationText(input.dialogue, input.language)) return input.dialogue;
 
   const preservedEnglish = input.keepEnglish
-    ? extractEnglishLinesFromDialogue(input.dialogue)
+    ? extractEnglishLinesFromDialogue(input.dialogue, input.language)
     : [];
 
   try {
@@ -374,9 +488,9 @@ No | . No commentary.`,
     if (
       repaired &&
       hasNativeScript(input.language, repaired) &&
-      hasRomanizationText(repaired)
+      hasRomanizationText(repaired, input.language)
     ) {
-      return appendPreservedEnglish(repaired, preservedEnglish);
+      return appendPreservedEnglish(repaired, preservedEnglish, input.language);
     }
     return input.dialogue;
   } catch (error) {
@@ -391,7 +505,7 @@ async function ensureEnglishGloss(input: {
   dialogue: string;
   learnerName?: string;
 }): Promise<string> {
-  if (hasEnglishGloss(input.dialogue)) return input.dialogue;
+  if (hasEnglishGloss(input.dialogue, input.language)) return input.dialogue;
   const name = input.learnerName?.trim() || "the learner";
   try {
     const completion = await aiClient.chat.completions.create({
@@ -416,11 +530,19 @@ No labels like "English:". Address the learner as ${name}. No | characters.`,
     )
       .trim()
       .replace(/\|/g, "");
-    if (repaired && hasEnglishGloss(repaired) && repaired.includes(input.dialogue.split("\n")[0]!.trim().slice(0, 12))) {
+    if (
+      repaired &&
+      hasEnglishGloss(repaired, input.language) &&
+      repaired.includes(input.dialogue.split("\n")[0]!.trim().slice(0, 12))
+    ) {
       return repaired;
     }
     // If model returned only English, append it
-    if (repaired && looksLikeEnglishGloss(repaired) && !repaired.includes("\n")) {
+    if (
+      repaired &&
+      looksLikeEnglishGloss(repaired, input.language) &&
+      !repaired.includes("\n")
+    ) {
       return `${input.dialogue.trim()}\n${repaired}`;
     }
     return input.dialogue;
@@ -568,8 +690,23 @@ async function finalizeReply(
   let dialogue = parsed.dialogue.replace(/\|/g, "");
   let correction = parsed.correction;
   const preservedEnglish = showEnglish
-    ? extractEnglishLinesFromDialogue(dialogue)
+    ? extractEnglishLinesFromDialogue(dialogue, input.language)
     : [];
+
+  if (
+    NON_LATIN_LANGUAGES.includes(input.language) &&
+    !hasNativeScript(input.language, dialogue)
+  ) {
+    dialogue = await withTimeout(
+      ensureNativeScript({
+        language: input.language,
+        dialogue,
+        keepEnglish: showEnglish,
+      }),
+      Math.min(repairBudgetMs, 5500),
+      dialogue,
+    );
+  }
 
   const scriptBad = needsNonLatinRepair(input.language, dialogue);
   const brevityBad = needsBrevityRepair(input.level, dialogue, showEnglish);
@@ -589,13 +726,13 @@ async function finalizeReply(
       repairBudgetMs,
       dialogue,
     );
-    dialogue = appendPreservedEnglish(dialogue, preservedEnglish);
+    dialogue = appendPreservedEnglish(dialogue, preservedEnglish, input.language);
   }
 
   if (
     NON_LATIN_LANGUAGES.includes(input.language) &&
     hasNativeScript(input.language, dialogue) &&
-    !hasRomanizationText(dialogue)
+    !hasRomanizationText(dialogue, input.language)
   ) {
     dialogue = await withTimeout(
       addRomanization({
@@ -606,10 +743,14 @@ async function finalizeReply(
       Math.min(repairBudgetMs, 5000),
       dialogue,
     );
-    dialogue = appendPreservedEnglish(dialogue, preservedEnglish);
+    dialogue = appendPreservedEnglish(dialogue, preservedEnglish, input.language);
   }
 
-  if (showEnglish && !hasEnglishGloss(dialogue)) {
+  if (
+    showEnglish &&
+    NON_LATIN_LANGUAGES.includes(input.language) &&
+    !hasEnglishGloss(dialogue, input.language)
+  ) {
     dialogue = await withTimeout(
       ensureEnglishGloss({
         language: input.language,
@@ -617,8 +758,10 @@ async function finalizeReply(
         learnerName: input.learnerName,
       }),
       Math.min(repairBudgetMs, fast ? 3500 : 5000),
-      appendPreservedEnglish(dialogue, preservedEnglish),
+      appendPreservedEnglish(dialogue, preservedEnglish, input.language),
     );
+  } else {
+    dialogue = stripEnglishGloss(dialogue, input.language);
   }
 
   // On the streaming/fast path, skip the extra correction round-trip to beat proxy timeouts.

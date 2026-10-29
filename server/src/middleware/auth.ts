@@ -1,6 +1,8 @@
 import type { NextFunction, Request, Response } from "express";
 import { verifyAccessToken } from "../utils/tokens.js";
-import { AppError } from "../utils/errors.js";
+import { AppError, isAppError } from "../utils/errors.js";
+import { userRepository } from "../repositories/userRepository.js";
+import { assertAccountActive } from "../utils/accountStatus.js";
 
 export type AuthenticatedRequest = Request & {
   user?: {
@@ -9,7 +11,7 @@ export type AuthenticatedRequest = Request & {
   };
 };
 
-export function requireAuth(
+export async function requireAuth(
   req: AuthenticatedRequest,
   _res: Response,
   next: NextFunction,
@@ -22,9 +24,21 @@ export function requireAuth(
   try {
     const token = header.slice("Bearer ".length);
     const payload = verifyAccessToken(token);
-    req.user = { id: payload.sub, email: payload.email };
+    const user = await userRepository.findById(payload.sub);
+    if (!user) {
+      return next(new AppError(401, "UNAUTHORIZED", "Authentication required."));
+    }
+    const pathOnly = (req.originalUrl.split("?")[0] || "").replace(/\/+$/, "");
+    const isLogout = pathOnly === "/api/auth/logout";
+    if (!isLogout) {
+      assertAccountActive(user);
+    }
+    req.user = { id: user._id.toString(), email: user.email };
     next();
-  } catch {
+  } catch (error) {
+    if (isAppError(error)) {
+      return next(error);
+    }
     next(new AppError(401, "UNAUTHORIZED", "Authentication required."));
   }
 }

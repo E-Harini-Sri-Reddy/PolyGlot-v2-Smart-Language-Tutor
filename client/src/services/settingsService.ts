@@ -41,6 +41,7 @@ export async function completeOnboarding(input: {
   dailyGoalMinutes: number;
   tutorPersonality: TutorPersonality;
   preferredTopics: string[];
+  showEnglishUnderReplies?: boolean;
 }) {
   return apiFetch<{
     success: boolean;
@@ -50,6 +51,7 @@ export async function completeOnboarding(input: {
       email: string;
       avatarUrl: string | null;
       onboardingCompleted: boolean;
+      hasPassword?: boolean;
     };
     settings: UserSettings;
   }>("/api/settings/onboarding", {

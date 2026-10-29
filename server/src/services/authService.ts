@@ -13,6 +13,7 @@ import {
   hashToken,
   sendPasswordResetEmail,
 } from "./emailService.js";
+import { assertAccountActive } from "../utils/accountStatus.js";
 
 const googleClient = env.GOOGLE_CLIENT_ID
   ? new OAuth2Client(env.GOOGLE_CLIENT_ID)
@@ -25,6 +26,7 @@ function publicUser(user: {
   avatarUrl?: string | null;
   onboardingCompleted?: boolean | null;
   pronouns?: string | null;
+  passwordHash?: string | null;
 }) {
   return {
     id: user._id.toString(),
@@ -33,7 +35,47 @@ function publicUser(user: {
     avatarUrl: user.avatarUrl ?? null,
     onboardingCompleted: Boolean(user.onboardingCompleted),
     pronouns: user.pronouns ?? "",
+    hasPassword: Boolean(user.passwordHash),
   };
+}
+
+async function findPasswordUser(email: string, password: string) {
+  const user = await userRepository.findByEmail(email);
+  if (!user || !user.passwordHash) {
+    throw new AppError(401, "INVALID_CREDENTIALS", "Invalid email or password.");
+  }
+  const ok = await bcrypt.compare(password, user.passwordHash);
+  if (!ok) {
+    throw new AppError(401, "INVALID_CREDENTIALS", "Invalid email or password.");
+  }
+  return user;
+}
+
+async function findGoogleUser(idToken: string) {
+  if (!googleClient || !env.GOOGLE_CLIENT_ID) {
+    throw new AppError(
+      503,
+      "GOOGLE_AUTH_UNAVAILABLE",
+      "Google sign-in is not configured yet.",
+    );
+  }
+
+  const ticket = await googleClient.verifyIdToken({
+    idToken,
+    audience: env.GOOGLE_CLIENT_ID,
+  });
+  const payload = ticket.getPayload();
+  if (!payload?.email || !payload.sub) {
+    throw new AppError(401, "INVALID_GOOGLE_TOKEN", "Could not verify Google account.");
+  }
+
+  const user =
+    (await userRepository.findByGoogleId(payload.sub)) ||
+    (await userRepository.findByEmail(payload.email));
+  if (!user) {
+    throw new AppError(401, "INVALID_GOOGLE_TOKEN", "Could not verify Google account.");
+  }
+  return user;
 }
 
 async function issueTokens(userId: string, email: string) {
@@ -85,6 +127,7 @@ export const authService = {
       throw new AppError(401, "INVALID_CREDENTIALS", "Invalid email or password.");
     }
 
+    assertAccountActive(user);
     return issueTokens(user._id.toString(), user.email);
   },
 
@@ -119,6 +162,7 @@ export const authService = {
       }
       user.emailVerified = true;
       await userRepository.save(user);
+      assertAccountActive(user);
     } else {
       user = await userRepository.create({
         name: payload.name || payload.email.split("@")[0] || "Learner",
@@ -148,6 +192,7 @@ export const authService = {
     if (!user?.refreshTokenHash) {
       throw new AppError(401, "INVALID_REFRESH_TOKEN", "Session expired. Please log in again.");
     }
+    assertAccountActive(user);
 
     const matches = await bcrypt.compare(refreshToken, user.refreshTokenHash);
     if (!matches) {
@@ -170,8 +215,24 @@ export const authService = {
     if (!user) {
       throw new AppError(404, "USER_NOT_FOUND", "User not found.");
     }
+    assertAccountActive(user);
     const settings = await userSettingsRepository.findByUserId(userId);
     return { user: publicUser(user), settings };
+  },
+
+  async restoreAccount(input: { email?: string; password?: string; idToken?: string }) {
+    const user = input.idToken
+      ? await findGoogleUser(input.idToken)
+      : await findPasswordUser(input.email || "", input.password || "");
+
+    if (user.accountStatus === "pending_deletion") {
+      user.accountStatus = "active";
+      user.deletionScheduledAt = null;
+      user.deletionPurgeAt = null;
+      await userRepository.save(user);
+    }
+
+    return issueTokens(user._id.toString(), user.email);
   },
 
   async forgotPassword(email: string) {

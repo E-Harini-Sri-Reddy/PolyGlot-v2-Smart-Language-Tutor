@@ -5,6 +5,7 @@ import {
   PROFICIENCY_LEVELS,
   SUPPORTED_LANGUAGES,
   TUTOR_PERSONALITIES,
+  supportsTranscript,
   type ProficiencyLevel,
   type SupportedLanguage,
   type TutorPersonality,
@@ -12,6 +13,7 @@ import {
 import { getSettings, updateSettings, type UserSettings } from "../services/settingsService";
 import { ApiError } from "../services/api";
 import { useAuthStore } from "../store/authStore";
+import { AccountManagement } from "../features/settings/AccountManagement";
 
 export function SettingsPage() {
   const setSession = useAuthStore((s) => s.setSession);
@@ -45,7 +47,9 @@ export function SettingsPage() {
         tutorPersonality: settings.tutorPersonality,
         dailyGoalMinutes: settings.dailyGoalMinutes,
         learningGoal: settings.learningGoal,
-        showEnglishUnderReplies: settings.showEnglishUnderReplies,
+        showEnglishUnderReplies: supportsTranscript(settings.targetLanguage)
+          ? settings.showEnglishUnderReplies
+          : false,
       });
       setSettings(data.settings);
       if (accessToken && authUser) {
@@ -71,7 +75,7 @@ export function SettingsPage() {
     <motion.div
       initial={{ opacity: 0, y: 8 }}
       animate={{ opacity: 1, y: 0 }}
-      className="mx-auto max-w-2xl rounded-3xl border border-mist bg-white/85 p-8 shadow-sm"
+      className="mx-auto max-w-3xl rounded-3xl border border-mist bg-white/85 p-8 shadow-sm"
     >
       <h1 className="font-display text-3xl font-semibold text-ink">Settings</h1>
       <p className="mt-1 text-sm text-ink-soft">
@@ -82,28 +86,39 @@ export function SettingsPage() {
         <div className="mt-6 space-y-4">
           <div className="rounded-2xl border border-sea/30 bg-sea/5 p-4">
             <p className="text-sm font-semibold text-ink">Chat display</p>
-            <label className="mt-3 flex cursor-pointer items-start gap-3">
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4 accent-sea"
-                checked={Boolean(settings.showEnglishUnderReplies)}
-                onChange={(e) =>
-                  setSettings({
-                    ...settings,
-                    showEnglishUnderReplies: e.target.checked,
-                  })
-                }
-              />
-              <span>
-                <span className="block font-medium text-ink">
-                  Show English under Polly’s replies
+            {supportsTranscript(settings.targetLanguage) ? (
+              <label className="mt-3 flex cursor-pointer items-start gap-3">
+                <input
+                  type="checkbox"
+                  className="mt-1 h-4 w-4 accent-sea"
+                  checked={Boolean(settings.showEnglishUnderReplies)}
+                  onChange={(e) =>
+                    setSettings({
+                      ...settings,
+                      showEnglishUnderReplies: e.target.checked,
+                    })
+                  }
+                />
+                <span>
+                  <span className="block font-medium text-ink">
+                    Show English transcript under Polly’s replies
+                  </span>
+                  <span className="mt-0.5 block text-xs text-ink-soft">
+                    Native script, then romanization, then an English translation.
+                  </span>
                 </span>
-                <span className="mt-0.5 block text-xs text-ink-soft">
-                  When enabled, replies show native script, romanization (when needed), then
-                  an English translation underneath.
-                </span>
-              </span>
-            </label>
+              </label>
+            ) : (
+              <div className="mt-3 rounded-xl bg-white/70 px-3 py-3">
+                <p className="text-sm font-medium text-ink">
+                  Transcript / romanization is not supported
+                </p>
+                <p className="mt-1 text-xs leading-relaxed text-ink-soft">
+                  {settings.targetLanguage} already uses the Latin alphabet, so Polly
+                  replies in {settings.targetLanguage} only — no extra reading line.
+                </p>
+              </div>
+            )}
           </div>
 
           <label className="block text-sm">
@@ -140,12 +155,16 @@ export function SettingsPage() {
             <span className="mb-1 block text-ink-soft">Target language</span>
             <select
               value={settings.targetLanguage}
-              onChange={(e) =>
+              onChange={(e) => {
+                const targetLanguage = e.target.value as SupportedLanguage;
                 setSettings({
                   ...settings,
-                  targetLanguage: e.target.value as SupportedLanguage,
-                })
-              }
+                  targetLanguage,
+                  showEnglishUnderReplies: supportsTranscript(targetLanguage)
+                    ? settings.showEnglishUnderReplies
+                    : false,
+                });
+              }}
               className="w-full rounded-xl border border-mist bg-foam px-3 py-2.5"
             >
               {SUPPORTED_LANGUAGES.map((lang) => (
@@ -252,6 +271,8 @@ export function SettingsPage() {
       >
         {saving ? "Saving..." : "Save settings"}
       </button>
+
+      <AccountManagement />
     </motion.div>
   );
 }

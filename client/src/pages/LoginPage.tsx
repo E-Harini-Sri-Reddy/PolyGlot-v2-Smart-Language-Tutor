@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, Navigate } from "react-router-dom";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
@@ -15,10 +15,37 @@ const schema = z.object({
 
 type FormValues = z.infer<typeof schema>;
 
+type PendingDeletion = {
+  purgeAt: string;
+  email?: string;
+  password?: string;
+  idToken?: string;
+};
+
+function formatPurgeDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "the scheduled date";
+  return date.toLocaleDateString(undefined, {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
 export function LoginPage() {
   const user = useAuthStore((s) => s.user);
   const login = useAuthStore((s) => s.login);
+  const restoreAccount = useAuthStore((s) => s.restoreAccount);
   const [error, setError] = useState<string | null>(null);
+  const [pending, setPending] = useState<PendingDeletion | null>(null);
+  const [restoring, setRestoring] = useState(false);
+  const handleGooglePendingDeletion = useCallback(
+    (info: { purgeAt: string; idToken: string }) => {
+      setError(null);
+      setPending(info);
+    },
+    [],
+  );
   const {
     register,
     handleSubmit,
@@ -32,9 +59,71 @@ export function LoginPage() {
     try {
       await login(values.email, values.password);
     } catch (err) {
+      if (err instanceof ApiError && err.code === "ACCOUNT_PENDING_DELETION") {
+        setPending({
+          email: values.email,
+          password: values.password,
+          purgeAt: typeof err.details.purgeAt === "string" ? err.details.purgeAt : "",
+        });
+        return;
+      }
       setError(err instanceof ApiError ? err.message : "Could not log in.");
     }
   });
+
+  async function handleRestore() {
+    if (!pending) return;
+    setRestoring(true);
+    setError(null);
+    try {
+      if (pending.idToken) {
+        await restoreAccount({ idToken: pending.idToken });
+      } else if (pending.email && pending.password) {
+        await restoreAccount({ email: pending.email, password: pending.password });
+      }
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Could not restore account.");
+      setRestoring(false);
+    }
+  }
+
+  if (pending) {
+    return (
+      <AuthLayout
+        title="Account scheduled for deletion"
+        subtitle="You can restore everything, including snapshot history, during the 30-day grace period."
+      >
+        <p className="text-sm leading-relaxed text-ink">
+          Your account is scheduled for permanent deletion on{" "}
+          <span className="font-semibold">{formatPurgeDate(pending.purgeAt)}</span>. Would you
+          like to restore your account?
+        </p>
+
+        {error && <p className="mt-4 text-sm text-coral">{error}</p>}
+
+        <button
+          type="button"
+          disabled={restoring}
+          onClick={() => void handleRestore()}
+          className="mt-6 w-full rounded-xl bg-sea px-4 py-3 font-semibold text-white transition hover:bg-sea-deep disabled:opacity-60"
+        >
+          {restoring ? "Restoring..." : "Restore Account"}
+        </button>
+
+        <button
+          type="button"
+          disabled={restoring}
+          onClick={() => {
+            setPending(null);
+            setError(null);
+          }}
+          className="mt-3 w-full rounded-xl border border-mist bg-foam px-4 py-3 text-sm font-semibold text-ink disabled:opacity-60"
+        >
+          Back to login
+        </button>
+      </AuthLayout>
+    );
+  }
 
   return (
     <AuthLayout title="Welcome back" subtitle="Log in to continue practicing with Polly.">
@@ -79,7 +168,10 @@ export function LoginPage() {
         <div className="h-px flex-1 bg-mist" />
       </div>
 
-      <GoogleSignInButton onError={setError} />
+      <GoogleSignInButton
+        onError={setError}
+        onPendingDeletion={handleGooglePendingDeletion}
+      />
 
       <div className="mt-5 space-y-2 text-center text-sm text-ink-soft">
         <p>

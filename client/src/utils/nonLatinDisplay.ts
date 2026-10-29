@@ -23,11 +23,35 @@ function hasNativeScript(language: SupportedLanguage, text: string): boolean {
   }
 }
 
-/** Common romanization particles / endings — not English prose. */
-const ROMAJI_MARKERS =
-  /\b(wa|ga|wo|o|ni|de|to|mo|ka|yo|ne|desu|masu|mashita|masen|kudasai|san|chan|kun|watashi|anata|ore|boku|hai|iie|konnichiwa|arigatou|sumimasen|kore|sore|are|doko|nani|dare|itsu|dou|genki|kimashita|sunde|imasu|porī|pori|polli|buli|poli|main|aap|hoon|se|hai|kahan|shahar|bharat|namaskar|mera|naam)\b/i;
+const ENGLISH_FUNCTION_WORDS =
+  /\b(the|and|or|but|with|from|that|this|these|those|what|where|which|when|why|who|how|you|your|yours|i'm|i am|we|they|them|his|her|she|he|it's|is|are|was|were|be|been|have|has|had|do|does|did|not|don't|hello|welcome|please|thanks|thank|yes|no|sorry|great|nice|because|about|into|just|like|want|would|could|should|can|will|for|our|my|me)\b/gi;
 
-function looksLikeRomanization(text: string): boolean {
+const ENGLISH_STARTERS =
+  /^(i |i'm |i am |you |we |they |he |she |it |this |that |what |where |which |how |who |when |why |do |does |did |are |is |am |from |the |a |an |yes |no |hi |hello |hey |nice |great |sorry |please |thank |thanks |welcome |my )/i;
+
+function romanizationMarker(language: SupportedLanguage): RegExp | null {
+  switch (language) {
+    case "Japanese":
+      return /\b(wa|ga|wo|o|ni|de|to|mo|ka|yo|ne|desu|masu|mashita|masen|kudasai|san|chan|kun|watashi|anata|ore|boku|hai|iie|konnichiwa|arigatou|sumimasen|kore|sore|are|doko|nani|dare|itsu|dou|genki|imasu|deshita)\b|[āīūēōĀĪŪĒŌ]/i;
+    case "Korean":
+      return /\b(annyeong|haseyo|hamnida|seumnida|imnida|jinaeyo|gwaenchanh|gomawo|jeoneun|ireum|eoseo|hwanyeong|jeo|aniyo|gwa|hago|nida|yeyo|ayo|eyo|eun|neun|eul|reul|eseo)\b|-(eun|neun|eul|reul|yo|eyo|yeyo)\b/i;
+    case "Hindi":
+      return /\b(hai|hain|hoon|hun|aap|main|mein|kya|kaise|kahan|namaste|ka|ki|ke|se|ko|par|raha|rahi|nahi|ji|aur|mera|meri|naam|swagat|dhanyavaad|kripya|theek|accha|achha|kyun|woh|yeh|aapke|aapka|mujhe|tum|hum|hoga|karo|karna)\b/i;
+    case "Chinese":
+      return /[āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜüĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙ]|(\b(nǐ|wǒ|hǎo|shì|ma|ne|le|men|xièxie)\b)/i;
+    case "Arabic":
+      return /\b(marhaba|marhaban|kayfa|haluk|ismi|anta|anti|shukran|ahlan|haluki|ismee)\b/i;
+    default:
+      return null;
+  }
+}
+
+function isLatinLine(text: string): boolean {
+  const latin = (text.match(/[A-Za-zÀ-ÿĀ-žāīūēōĀĪŪĒŌ]/g) || []).length;
+  return latin / Math.max(text.length, 1) >= 0.4;
+}
+
+function looksLikeRomanization(text: string, language: SupportedLanguage): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (hasNativeScript("Japanese", trimmed) || hasNativeScript("Chinese", trimmed)) {
@@ -37,23 +61,30 @@ function looksLikeRomanization(text: string): boolean {
     return false;
   }
   if (hasNativeScript("Hindi", trimmed)) return false;
-  // English gloss must not be treated as romanization
-  if (looksLikeEnglishLine(trimmed)) return false;
+  if (!isLatinLine(trimmed)) return false;
+  if (looksLikeEnglishLine(trimmed, language)) return false;
 
-  const latin = (trimmed.match(/[A-Za-zÀ-ÿĀ-žāīūēōĀĪŪĒŌ]/g) || []).length;
-  if (latin / Math.max(trimmed.length, 1) < 0.4) return false;
-
-  if (ROMAJI_MARKERS.test(trimmed)) return true;
-  if (/[āīūēōĀĪŪĒŌ]/.test(trimmed)) return true;
-  if (trimmed.split(/\s+/).length <= 12) return true;
-  return latin / Math.max(trimmed.length, 1) > 0.55;
+  const marker = romanizationMarker(language);
+  if (marker?.test(trimmed)) return true;
+  if (/[āīūēōĀĪŪĒŌāáǎàēéěèīíǐìōóǒòūúǔù]/.test(trimmed)) return true;
+  return false;
 }
 
-function looksLikeEnglishLine(text: string): boolean {
+function looksLikePhoneticLine(text: string): boolean {
+  const trimmed = text.trim();
+  if (!trimmed) return false;
+  if (/[\u3040-\u9fff\uac00-\ud7af\u0600-\u06ff\u0900-\u097f]/.test(trimmed)) {
+    return false;
+  }
+  const hyphens = (trimmed.match(/-/g) || []).length;
+  if (hyphens >= 2) return true;
+  return /[A-Z]{2,}[a-z]*-/.test(trimmed);
+}
+
+function looksLikeEnglishLine(text: string, language?: SupportedLanguage): boolean {
   const trimmed = text.trim().replace(/^English\s*:\s*/i, "");
   if (!trimmed) return false;
-  if (ROMAJI_MARKERS.test(trimmed) && trimmed.split(/\s+/).length <= 8) return false;
-  if (/[āīūēō]/.test(trimmed)) return false;
+  if (looksLikePhoneticLine(trimmed)) return false;
   if (hasNativeScript("Japanese", trimmed) || hasNativeScript("Chinese", trimmed)) {
     return false;
   }
@@ -62,14 +93,31 @@ function looksLikeEnglishLine(text: string): boolean {
   }
   if (hasNativeScript("Hindi", trimmed)) return false;
 
-  return (
-    /^(i |i'm |i am |you |we |they |he |she |it |this |that |what |where |which |how |who |when |why |do |does |did |are |is |am |from |the |a |an )/i.test(
+  if (/[āīūēōĀĪŪĒŌ]/.test(trimmed)) return false;
+
+  const words = trimmed.split(/\s+/).filter(Boolean);
+  const functionHits = trimmed.match(ENGLISH_FUNCTION_WORDS)?.length ?? 0;
+  const marker = language ? romanizationMarker(language) : null;
+
+  if (
+    /^(hello|hi|hey|welcome|thanks|thank you|please|sorry|yes|no|great|nice|my name)\b/i.test(
       trimmed,
-    ) ||
-    (/^[A-Za-z][A-Za-z0-9 ,'’?.!-]*[.?!]?$/.test(trimmed) &&
-      trimmed.split(/\s+/).length >= 3 &&
-      !ROMAJI_MARKERS.test(trimmed))
-  );
+    )
+  ) {
+    return true;
+  }
+  // English prose wins even if Polly/Buli/Polli appears in the line
+  if (functionHits >= 2 && words.length >= 3) return true;
+  if (marker?.test(trimmed)) return false;
+  if (ENGLISH_STARTERS.test(trimmed) && functionHits >= 1) return true;
+  if (
+    /^[A-Za-z][A-Za-z0-9 ,'’?.!-]*[.?!]?$/.test(trimmed) &&
+    words.length >= 3 &&
+    functionHits >= 1
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function cleanLine(line: string): string {
@@ -106,7 +154,7 @@ export function buildScriptBlocks(
     if (
       mixed &&
       hasNativeScript(language, mixed[1]!) &&
-      looksLikeRomanization(mixed[2]!)
+      (looksLikeRomanization(mixed[2]!, language) || isLatinLine(mixed[2]!))
     ) {
       lines.push(mixed[1]!.trim(), mixed[2]!.trim());
       continue;
@@ -120,35 +168,46 @@ export function buildScriptBlocks(
     const next = lines[i + 1];
     const third = lines[i + 2];
 
-    if (hasNativeScript(language, line) && next && looksLikeRomanization(next)) {
-      const english =
-        third && looksLikeEnglishLine(third) ? third.replace(/^English\s*:\s*/i, "") : "";
+    if (hasNativeScript(language, line) && next && !hasNativeScript(language, next) && isLatinLine(next)) {
+      const nextIsEnglish = looksLikeEnglishLine(next, language);
+      const nextIsRoma = !nextIsEnglish;
+      const englishFromThird =
+        nextIsRoma && third && looksLikeEnglishLine(third, language)
+          ? third.replace(/^English\s*:\s*/i, "")
+          : "";
+      const englishFromNext = nextIsEnglish ? next.replace(/^English\s*:\s*/i, "") : "";
       blocks.push({
         native: line,
-        romanization: next,
-        english,
+        romanization: nextIsRoma ? next : "",
+        english: englishFromThird || englishFromNext,
       });
-      i += english ? 2 : 1;
+      if (englishFromThird) i += 2;
+      else i += 1;
       continue;
     }
 
     if (hasNativeScript(language, line)) {
       const english =
-        next && looksLikeEnglishLine(next) ? next.replace(/^English\s*:\s*/i, "") : "";
+        next && looksLikeEnglishLine(next, language)
+          ? next.replace(/^English\s*:\s*/i, "")
+          : "";
       blocks.push({
         native: line,
         romanization: "",
         english,
       });
       if (english) i += 1;
-    } else if (looksLikeRomanization(line)) {
+    } else if (looksLikeRomanization(line, language)) {
       blocks.push({ native: "", romanization: line });
-    } else if (looksLikeEnglishLine(line)) {
+    } else if (looksLikeEnglishLine(line, language)) {
       blocks.push({
         native: "",
         romanization: "",
         english: line.replace(/^English\s*:\s*/i, ""),
       });
+    } else if (isLatinLine(line)) {
+      // Unknown latin under a non-Latin chat: treat as romanization, never English
+      blocks.push({ native: "", romanization: line });
     }
   }
 
@@ -171,8 +230,58 @@ export function extractEnglishLines(
     .split(/\r?\n/)
     .map((line) => cleanLine(line))
     .filter(Boolean);
-  // Prefer explicit trailing English-looking lines
-  return lines.filter((line) => looksLikeEnglishLine(line));
+  return lines.filter(
+    (line) =>
+      looksLikeEnglishLine(line, language) || looksLikePhoneticLine(line),
+  );
+}
+
+/** Remove English gloss / extra phonetic lines when the learner turned help off. */
+export function stripEnglishLines(
+  content: string,
+  language: SupportedLanguage,
+): string {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => cleanLine(line))
+    .filter(Boolean);
+
+  if (NON_LATIN_LANGUAGES.includes(language)) {
+    return lines
+      .filter((line) => !looksLikeEnglishLine(line, language))
+      .join("\n");
+  }
+
+  const kept: string[] = [];
+  for (const line of lines) {
+    if (
+      kept.length > 0 &&
+      (looksLikeEnglishLine(line, language) || looksLikePhoneticLine(line))
+    ) {
+      continue;
+    }
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+export function stripCorrectionArtifacts(content: string): string {
+  return content
+    .replace(/<<<\s*CORRECTION\s*>>>[\s\S]*?(<<<\s*END\s*>>>|$)/gi, "")
+    .replace(/<<<\s*END\s*>>>/gi, "")
+    .replace(/\n?\s*\{\s*"\s*encourage\s*"\s*:[\s\S]*$/i, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+export function visibleDialogueContent(
+  content: string,
+  language: SupportedLanguage,
+  showEnglish: boolean,
+): string {
+  const cleaned = stripCorrectionArtifacts(content);
+  if (showEnglish) return cleaned;
+  return stripEnglishLines(cleaned, language);
 }
 
 export function hasRomanizationLine(

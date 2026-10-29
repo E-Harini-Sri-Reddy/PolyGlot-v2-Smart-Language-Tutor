@@ -2,10 +2,11 @@ import type { Response } from "express";
 import mongoose from "mongoose";
 import { aiService } from "../ai/aiService.js";
 import { memoryBuilder } from "../ai/memoryBuilder.js";
-import type {
-  ProficiencyLevel,
-  SupportedLanguage,
-  TutorPersonality,
+import {
+  supportsTranscript,
+  type ProficiencyLevel,
+  type SupportedLanguage,
+  type TutorPersonality,
 } from "../constants/languages.js";
 import { conversationRepository } from "../repositories/conversationRepository.js";
 import { messageRepository } from "../repositories/messageRepository.js";
@@ -273,7 +274,9 @@ export const chatService = {
         (settings?.tutorPersonality as TutorPersonality) || "Friendly Teacher",
       helpRequested: helpMode,
       memoryBlock: memory.memoryBlock,
-      showEnglishUnderReplies: Boolean(settings?.showEnglishUnderReplies),
+      showEnglishUnderReplies:
+        Boolean(settings?.showEnglishUnderReplies) &&
+        supportsTranscript(conversation.language as SupportedLanguage),
     };
 
     if (res) {
@@ -441,7 +444,9 @@ export const chatService = {
         (settings?.tutorPersonality as TutorPersonality) || "Friendly Teacher",
       helpRequested: helpMode,
       memoryBlock: memory.memoryBlock,
-      showEnglishUnderReplies: Boolean(settings?.showEnglishUnderReplies),
+      showEnglishUnderReplies:
+        Boolean(settings?.showEnglishUnderReplies) &&
+        supportsTranscript(conversation.language as SupportedLanguage),
     };
 
     res.setHeader("Content-Type", "text/event-stream; charset=utf-8");

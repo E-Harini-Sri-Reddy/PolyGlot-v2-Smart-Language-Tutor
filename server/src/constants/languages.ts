@@ -34,4 +34,15 @@ export const NON_LATIN_LANGUAGES: SupportedLanguage[] = [
   "Arabic",
 ];
 
+export const LATIN_SCRIPT_LANGUAGES: SupportedLanguage[] = [
+  "Spanish",
+  "French",
+  "German",
+  "English",
+];
+
+export function supportsTranscript(language: SupportedLanguage): boolean {
+  return NON_LATIN_LANGUAGES.includes(language);
+}
+
 export const NATIVE_LANGUAGE = "English" as const;

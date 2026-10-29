@@ -7,15 +7,25 @@ import {
   SUPPORTED_LANGUAGES,
   TOPIC_OPTIONS,
   TUTOR_PERSONALITIES,
+  supportsTranscript,
   type ProficiencyLevel,
   type SupportedLanguage,
   type TutorPersonality,
 } from "../constants/languages";
+import { welcomeSample } from "../constants/transcriptSamples";
 import { completeOnboarding } from "../services/settingsService";
 import { useAuthStore } from "../store/authStore";
 import { ApiError } from "../services/api";
 
-const steps = ["Language", "Level", "Goal", "Daily time", "Tutor", "Topics"] as const;
+const steps = [
+  "Language",
+  "Transcript",
+  "Level",
+  "Goal",
+  "Daily time",
+  "Tutor",
+  "Topics",
+] as const;
 
 export function OnboardingPage() {
   const navigate = useNavigate();
@@ -31,6 +41,7 @@ export function OnboardingPage() {
     dailyGoalMinutes: 15,
     tutorPersonality: "Friendly Teacher" as TutorPersonality,
     preferredTopics: [] as string[],
+    showEnglishUnderReplies: false,
   });
 
   function toggleTopic(topic: string) {
@@ -46,7 +57,12 @@ export function OnboardingPage() {
     setSaving(true);
     setError(null);
     try {
-      const data = await completeOnboarding(form);
+      const data = await completeOnboarding({
+        ...form,
+        showEnglishUnderReplies: supportsTranscript(form.targetLanguage)
+          ? form.showEnglishUnderReplies
+          : false,
+      });
       if (accessToken) {
         setSession(accessToken, data.user);
       }
@@ -59,7 +75,7 @@ export function OnboardingPage() {
   }
 
   return (
-    <div className="mx-auto flex min-h-[70vh] max-w-xl flex-col justify-center px-4 py-10">
+    <div className="mx-auto flex min-h-[70vh] max-w-2xl flex-col justify-center px-4 py-10">
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
@@ -99,7 +115,15 @@ export function OnboardingPage() {
                   <button
                     key={lang}
                     type="button"
-                    onClick={() => setForm((f) => ({ ...f, targetLanguage: lang }))}
+                    onClick={() =>
+                      setForm((f) => ({
+                        ...f,
+                        targetLanguage: lang,
+                        showEnglishUnderReplies: supportsTranscript(lang)
+                          ? f.showEnglishUnderReplies
+                          : false,
+                      }))
+                    }
                     className={`rounded-xl px-3 py-3 text-sm font-medium ${
                       form.targetLanguage === lang
                         ? "bg-sea text-white"
@@ -113,6 +137,16 @@ export function OnboardingPage() {
             )}
 
             {step === 1 && (
+              <TranscriptChoice
+                language={form.targetLanguage}
+                showEnglish={form.showEnglishUnderReplies}
+                onChange={(showEnglishUnderReplies) =>
+                  setForm((f) => ({ ...f, showEnglishUnderReplies }))
+                }
+              />
+            )}
+
+            {step === 2 && (
               <div className="space-y-2">
                 {PROFICIENCY_LEVELS.map((level) => (
                   <button
@@ -129,7 +163,7 @@ export function OnboardingPage() {
               </div>
             )}
 
-            {step === 2 && (
+            {step === 3 && (
               <div className="grid grid-cols-2 gap-2">
                 {LEARNING_GOALS.map((goal) => (
                   <button
@@ -148,7 +182,7 @@ export function OnboardingPage() {
               </div>
             )}
 
-            {step === 3 && (
+            {step === 4 && (
               <div className="grid grid-cols-2 gap-2">
                 {[5, 10, 15, 30].map((minutes) => (
                   <button
@@ -169,7 +203,7 @@ export function OnboardingPage() {
               </div>
             )}
 
-            {step === 4 && (
+            {step === 5 && (
               <div className="space-y-2">
                 {TUTOR_PERSONALITIES.map((personality) => (
                   <button
@@ -190,7 +224,7 @@ export function OnboardingPage() {
               </div>
             )}
 
-            {step === 5 && (
+            {step === 6 && (
               <div className="grid grid-cols-2 gap-2">
                 {TOPIC_OPTIONS.map((topic) => (
                   <button
@@ -242,6 +276,69 @@ export function OnboardingPage() {
           )}
         </div>
       </motion.div>
+    </div>
+  );
+}
+
+function TranscriptChoice({
+  language,
+  showEnglish,
+  onChange,
+}: {
+  language: SupportedLanguage;
+  showEnglish: boolean;
+  onChange: (showEnglish: boolean) => void;
+}) {
+  const sample = welcomeSample(language);
+
+  if (!supportsTranscript(language)) {
+    return (
+      <div className="space-y-3">
+        <div className="rounded-2xl border border-mist bg-foam px-4 py-4">
+          <p className="text-sm font-semibold text-ink">
+            Transcript / romanization is not supported
+          </p>
+          <p className="mt-2 text-sm leading-relaxed text-ink-soft">
+            {language} already uses the Latin alphabet, so Polly replies in {language}{" "}
+            only — no extra reading line underneath.
+          </p>
+          <p className="mt-3 text-base leading-relaxed text-ink">{sample.native}</p>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-3">
+      <p className="text-sm text-ink-soft">
+        Choose how Polly’s {language} replies should look. You can change this later in
+        Settings.
+      </p>
+      <button
+        type="button"
+        onClick={() => onChange(false)}
+        className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+          !showEnglish
+            ? "border-sea bg-sea/10 ring-2 ring-sea/30"
+            : "border-mist bg-foam hover:border-sea/40"
+        }`}
+      >
+        <p className="text-sm font-semibold text-ink">No English Transcript</p>
+        <p className="mt-2 text-base leading-relaxed text-ink">{sample.native}</p>
+      </button>
+      <button
+        type="button"
+        onClick={() => onChange(true)}
+        className={`w-full rounded-2xl border px-4 py-4 text-left transition ${
+          showEnglish
+            ? "border-sea bg-sea/10 ring-2 ring-sea/30"
+            : "border-mist bg-foam hover:border-sea/40"
+        }`}
+      >
+        <p className="text-sm font-semibold text-ink">With English Transcript</p>
+        <p className="mt-2 text-base leading-relaxed text-ink">{sample.native}</p>
+        <p className="mt-1 text-sm leading-relaxed text-ink-soft">{sample.transcript}</p>
+      </button>
     </div>
   );
 }

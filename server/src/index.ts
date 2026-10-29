@@ -20,6 +20,9 @@ async function bootstrap() {
   const seeded = await scenarioService.ensurePresetsSeeded();
   console.log(`Preset scenarios ready (${seeded} templates)`);
 
+  const { startAccountPurgeJob } = await import("./jobs/accountPurgeJob.js");
+  startAccountPurgeJob();
+
   const app = express();
 
   // Required on Render / reverse proxies so secure cookies and IPs work

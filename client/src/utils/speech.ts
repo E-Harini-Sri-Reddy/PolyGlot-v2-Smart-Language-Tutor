@@ -3,7 +3,8 @@ import { SPEECH_LANG_MAP } from "../constants/languages";
 
 export function cleanSpeechText(text: string): string {
   return text
-    .replace(/<<<CORRECTION>>>[\s\S]*?<<<END>>>/gi, "")
+    .replace(/<<<\s*CORRECTION\s*>>>[\s\S]*?(<<<\s*END\s*>>>|$)/gi, "")
+    .replace(/\{\s*"encourage"\s*:[\s\S]*$/i, "")
     .replace(/\([^)]*\)/g, "")
     .replace(/[#*_`]/g, "")
     .trim();

@@ -18,6 +18,7 @@ type ApiErrorBody = {
   success?: boolean;
   code?: string;
   message?: string;
+  purgeAt?: string;
 };
 
 export class ApiError extends Error {
@@ -25,6 +26,7 @@ export class ApiError extends Error {
     public status: number,
     public code: string,
     message: string,
+    public details: Record<string, unknown> = {},
   ) {
     super(message);
     this.name = "ApiError";
@@ -106,10 +108,19 @@ export async function apiFetch<T>(
 
   const data = await parseJson(response);
   if (!response.ok) {
+    const details: Record<string, unknown> = {};
+    if (data && typeof data === "object") {
+      for (const [key, value] of Object.entries(data)) {
+        if (key !== "success" && key !== "code" && key !== "message") {
+          details[key] = value;
+        }
+      }
+    }
     throw new ApiError(
       response.status,
       data?.code || "REQUEST_FAILED",
       data?.message || "Request failed.",
+      details,
     );
   }
 

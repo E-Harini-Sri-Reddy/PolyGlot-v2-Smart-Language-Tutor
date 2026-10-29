@@ -54,7 +54,7 @@ function pronunciationRules(language: SupportedLanguage): string {
 你好！我叫波莉。你呢？
 Nǐ hǎo! Wǒ jiào Bō lì. Nǐ ne?
 
-- Line 1: Chinese characters only (full sentence(s)).
+- Line 1 MUST be Chinese characters. Pinyin-only is INVALID.
 - Line 2: Full Hanyu Pinyin for that same text.
 - Never put pinyin on the same line as characters.
 - Never include English.`;
@@ -64,7 +64,7 @@ Nǐ hǎo! Wǒ jiào Bō lì. Nǐ ne?
 こんにちは！私はポリーです。お元気ですか？
 Konnichiwa! Watashi wa Porī desu. O-genki desu ka?
 
-- Line 1: Japanese (hiragana/katakana/kanji) full sentence(s).
+- Line 1 MUST be Japanese hiragana/katakana/kanji. Romaji-only is INVALID.
 - Line 2: Full Hepburn romaji for that same text.
 - Never put romaji on the same line as Japanese.
 - Never use | chunk markers.
@@ -76,7 +76,7 @@ Konnichiwa! Watashi wa Porī desu. O-genki desu ka?
 안녕하세요! 제 이름은 폴리예요. 잘 지내요?
 Annyeonghaseyo! Je ireumeun Polli-yeyo. Jal jinaeyo?
 
-- Line 1: Hangul full sentence(s).
+- Line 1 MUST be Hangul. Romanization-only is INVALID.
 - Line 2: Full Revised Romanization for that same text.
 - Never put romanization on the same line as Hangul.
 - Never include English.
@@ -87,17 +87,17 @@ Annyeonghaseyo! Je ireumeun Polli-yeyo. Jal jinaeyo?
 مَرْحَبًا! اِسْمِي بُولِي. كَيْفَ حَالُك؟
 Marhaban! Ismi Buli. Kayfa haluk?
 
-- Line 1: Arabic script full sentence(s).
+- Line 1 MUST be Arabic script. Romanization-only is INVALID.
 - Line 2: Full Latin romanization for that same text.
 - Never put romanization on the same line as Arabic.
-- Never include English.
+- Never include an English translation line.
 - Your name is بولي / Buli only.`;
   }
   return `FORMAT (exactly 2 lines per short turn — NO | separators):
 नमस्ते! मेरा नाम पोली है। आप कैसे हैं?
 Namaste! Mera naam Poli hai. Aap kaise hain?
 
-- Line 1: Devanagari full sentence(s).
+- Line 1 MUST be Devanagari. Latin-only is INVALID.
 - Line 2: Full pronunciation for that same text.
 - Never put romanization on the same line as Devanagari.
 - Never include English.
@@ -230,7 +230,7 @@ CORRECTION BLOCK FORMAT (only when needed — place AFTER dialogue):
 }
 <<<END>>>
 
-CRITICAL: The correction block MUST be valid JSON. Keys must be exactly encourage, corrected, translation, wordByWord, explain, why — no spaces inside key quotes (never write " corrected"). Do not show raw JSON to the learner outside this block.
+CRITICAL: The correction block MUST be valid JSON and MUST end with <<<END>>>. Keys must be exactly encourage, corrected, translation, wordByWord, explain, why — no spaces inside key quotes (never write " corrected"). Never print the JSON in the spoken dialogue.
 
 Do NOT put the correction block before the dialogue.
 
@@ -255,12 +255,10 @@ LANGUAGE RULES:
 - Keep replies concise.
 - NEVER merely echo the learner's message.
 ${
-    showEnglishUnderReplies
-      ? `- English translation IS required on its own line after the ${language} text${
-          isNonLatin ? " (after romanization)" : ""
-        }.
+    isNonLatin && showEnglishUnderReplies
+      ? `- English translation IS required on its own line after the ${language} text (after romanization).
 - Do NOT use labels like "English:" — just the plain translation sentence.`
-      : `- Do NOT put English translations or English parentheses in the dialogue.`
+      : `- Do NOT put English translations, romanization, phonetic respellings, or English parentheses in the dialogue.`
   }
 ${
     isNonLatin
@@ -276,12 +274,10 @@ ${
 - Do NOT use | separators.
 - Do NOT put native script and romanization on the same line.
 ${pronunciation}`
-      : showEnglishUnderReplies
-        ? `
+      : `
 OUTPUT LAYOUT:
-Line 1: ${language} dialogue
-Line 2: plain English translation of that dialogue`
-        : ""
+- ${language} dialogue only. No extra transcript, romanization, or English translation line.
+- Transcript / romanization is not supported for ${language}.`
   }`;
 }
 

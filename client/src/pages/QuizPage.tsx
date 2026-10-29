@@ -11,6 +11,7 @@ import {
   submitQuiz,
   type GeneratedQuiz,
 } from "../services/quizService";
+import { getSettings } from "../services/settingsService";
 import { ApiError } from "../services/api";
 
 export function QuizPage() {
@@ -37,6 +38,16 @@ export function QuizPage() {
       .then((data) => setHistory(data.quizzes))
       .catch(() => undefined);
   }, [results, quiz]);
+
+  useEffect(() => {
+    void getSettings()
+      .then((data) => {
+        if (data.settings.targetLanguage) {
+          setLanguage(data.settings.targetLanguage);
+        }
+      })
+      .catch(() => undefined);
+  }, []);
 
   const canSubmit = useMemo(
     () => Boolean(quiz && answers.every((answer) => answer.trim().length > 0)),

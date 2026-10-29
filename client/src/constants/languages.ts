@@ -55,6 +55,17 @@ export const NON_LATIN_LANGUAGES: SupportedLanguage[] = [
   "Arabic",
 ];
 
+export const LATIN_SCRIPT_LANGUAGES: SupportedLanguage[] = [
+  "Spanish",
+  "French",
+  "German",
+  "English",
+];
+
+export function supportsTranscript(language: SupportedLanguage): boolean {
+  return NON_LATIN_LANGUAGES.includes(language);
+}
+
 export const SPEECH_LANG_MAP: Record<SupportedLanguage, string> = {
   Spanish: "es-ES",
   French: "fr-FR",

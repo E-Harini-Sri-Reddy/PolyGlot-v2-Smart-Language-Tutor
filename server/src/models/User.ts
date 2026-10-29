@@ -21,9 +21,20 @@ const userSchema = new Schema(
     passwordResetExpiresAt: { type: Date, default: null },
     lastLoginAt: { type: Date, default: null },
     onboardingCompleted: { type: Boolean, default: false },
+    accountStatus: {
+      type: String,
+      enum: ["active", "pending_deletion"],
+      default: "active",
+      index: true,
+    },
+    deletionScheduledAt: { type: Date, default: null },
+    deletionPurgeAt: { type: Date, default: null },
+    livePeriodStart: { type: Date, default: null },
   },
   { timestamps: true },
 );
+
+userSchema.index({ accountStatus: 1, deletionPurgeAt: 1 });
 
 export type UserDocument = HydratedDocument<{
   name: string;
@@ -38,6 +49,10 @@ export type UserDocument = HydratedDocument<{
   passwordResetExpiresAt?: Date | null;
   lastLoginAt?: Date | null;
   onboardingCompleted: boolean;
+  accountStatus: "active" | "pending_deletion";
+  deletionScheduledAt?: Date | null;
+  deletionPurgeAt?: Date | null;
+  livePeriodStart?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }>;

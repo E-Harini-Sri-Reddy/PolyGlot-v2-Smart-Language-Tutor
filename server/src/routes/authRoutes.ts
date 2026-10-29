@@ -29,3 +29,8 @@ authRoutes.post(
   authLimiter,
   asyncHandler(authController.resetPassword),
 );
+authRoutes.post(
+  "/restore-account",
+  authLimiter,
+  asyncHandler(authController.restoreAccount),
+);

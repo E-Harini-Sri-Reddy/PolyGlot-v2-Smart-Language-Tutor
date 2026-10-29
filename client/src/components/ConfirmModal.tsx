@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, type ReactNode } from "react";
 
 type ConfirmModalProps = {
   open: boolean;
@@ -7,6 +7,10 @@ type ConfirmModalProps = {
   confirmLabel?: string;
   cancelLabel?: string;
   confirming?: boolean;
+  confirmingLabel?: string;
+  confirmDisabled?: boolean;
+  confirmTone?: "danger" | "primary";
+  children?: ReactNode;
   onConfirm: () => void;
   onCancel: () => void;
 };
@@ -18,6 +22,10 @@ export function ConfirmModal({
   confirmLabel = "Delete",
   cancelLabel = "Cancel",
   confirming = false,
+  confirmingLabel = "Deleting...",
+  confirmDisabled = false,
+  confirmTone = "danger",
+  children,
   onConfirm,
   onCancel,
 }: ConfirmModalProps) {
@@ -33,6 +41,11 @@ export function ConfirmModal({
   }, [open, confirming, onCancel]);
 
   if (!open) return null;
+
+  const confirmClass =
+    confirmTone === "primary"
+      ? "rounded-xl bg-sea px-4 py-2.5 text-sm font-semibold text-white hover:bg-sea-deep disabled:opacity-60"
+      : "rounded-xl bg-coral px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60";
 
   return (
     <div
@@ -56,6 +69,7 @@ export function ConfirmModal({
         <p id="confirm-modal-description" className="mt-2 text-sm leading-relaxed text-ink-soft">
           {description}
         </p>
+        {children}
         <div className="mt-6 flex flex-wrap justify-end gap-3">
           <button
             type="button"
@@ -67,11 +81,11 @@ export function ConfirmModal({
           </button>
           <button
             type="button"
-            disabled={confirming}
+            disabled={confirming || confirmDisabled}
             onClick={onConfirm}
-            className="rounded-xl bg-coral px-4 py-2.5 text-sm font-semibold text-white hover:opacity-90 disabled:opacity-60"
+            className={confirmClass}
           >
-            {confirming ? "Deleting..." : confirmLabel}
+            {confirming ? confirmingLabel : confirmLabel}
           </button>
         </div>
       </div>

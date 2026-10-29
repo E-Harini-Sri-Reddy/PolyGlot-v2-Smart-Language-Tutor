@@ -14,6 +14,7 @@ import {
   extractEnglishLines,
   isNonLatinLanguage,
   nativeTextForSpeech,
+  visibleDialogueContent,
 } from "../../../utils/nonLatinDisplay";
 
 function renderMarkdown(text: string) {
@@ -236,8 +237,12 @@ function ScriptDialogue({
   showEnglish?: boolean;
 }) {
   const blocks = useMemo(
-    () => buildScriptBlocks(content, language),
-    [content, language],
+    () =>
+      buildScriptBlocks(
+        visibleDialogueContent(content, language, Boolean(showEnglish)),
+        language,
+      ),
+    [content, language, showEnglish],
   );
 
   if (blocks.length === 0) {
@@ -334,8 +339,23 @@ export function MessageBubble({
   const [savedWords, setSavedWords] = useState<Set<string>>(() => new Set());
 
   const html = useMemo(
-    () => renderMarkdown(message.content || ""),
-    [message.content],
+    () =>
+      renderMarkdown(
+        message.role !== "user" && !message.helpMode
+          ? visibleDialogueContent(
+              message.content || "",
+              language,
+              showEnglishUnderReplies,
+            )
+          : message.content || "",
+      ),
+    [
+      message.content,
+      message.role,
+      message.helpMode,
+      language,
+      showEnglishUnderReplies,
+    ],
   );
 
   const knownMeanings = useMemo(() => buildKnownMeanings(message), [message]);

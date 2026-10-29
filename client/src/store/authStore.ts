@@ -17,6 +17,9 @@ type AuthState = {
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   googleLogin: (idToken: string) => Promise<void>;
+  restoreAccount: (
+    input: { email: string; password: string } | { idToken: string },
+  ) => Promise<void>;
   logout: () => Promise<void>;
 };
 
@@ -84,6 +87,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     const data = await apiFetch<AuthResponse>("/api/auth/google", {
       method: "POST",
       body: JSON.stringify({ idToken }),
+    });
+    get().setSession(data.accessToken, data.user);
+  },
+
+  restoreAccount: async (input) => {
+    const data = await apiFetch<AuthResponse>("/api/auth/restore-account", {
+      method: "POST",
+      body: JSON.stringify(input),
     });
     get().setSession(data.accessToken, data.user);
   },

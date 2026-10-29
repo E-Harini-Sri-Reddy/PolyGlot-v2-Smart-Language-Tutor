@@ -37,4 +37,5 @@ export const completeOnboardingSchema = z.object({
   dailyGoalMinutes: z.number().int().min(5).max(120),
   tutorPersonality: z.enum(TUTOR_PERSONALITIES),
   preferredTopics: z.array(z.string().trim().min(1).max(40)).max(12).default([]),
+  showEnglishUnderReplies: z.boolean().optional().default(false),
 });

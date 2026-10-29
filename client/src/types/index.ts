@@ -5,6 +5,7 @@ export type PublicUser = {
   avatarUrl: string | null;
   onboardingCompleted: boolean;
   pronouns?: string;
+  hasPassword?: boolean;
 };
 
 export type TutorCorrection = {

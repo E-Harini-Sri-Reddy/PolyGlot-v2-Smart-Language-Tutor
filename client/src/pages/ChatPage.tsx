@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent } from "react";
 import {
   PROFICIENCY_LEVELS,
   SUPPORTED_LANGUAGES,
+  supportsTranscript,
   type ProficiencyLevel,
   type SupportedLanguage,
 } from "../constants/languages";
@@ -18,6 +19,10 @@ import { listScenarios, type Scenario } from "../services/scenarioService";
 import { getSettings } from "../services/settingsService";
 import type { ChatMessage, Conversation } from "../types";
 import { MessageBubble } from "../features/chat/components/MessageBubble";
+import {
+  stripCorrectionArtifacts,
+  visibleDialogueContent,
+} from "../utils/nonLatinDisplay";
 import { ConfirmModal } from "../components/ConfirmModal";
 import { ApiError } from "../services/api";
 import { Trash2 } from "lucide-react";
@@ -44,6 +49,10 @@ function mapServerMessage(message: {
 export function ChatPage() {
   const [language, setLanguage] = useState<SupportedLanguage>("Spanish");
   const [level, setLevel] = useState<ProficiencyLevel>("Beginner");
+  const [preferredLanguage, setPreferredLanguage] =
+    useState<SupportedLanguage>("Spanish");
+  const [preferredLevel, setPreferredLevel] =
+    useState<ProficiencyLevel>("Beginner");
   const [customScenario, setCustomScenario] = useState("");
   const [selectedScenarioId, setSelectedScenarioId] = useState<string | null>(null);
   const [presets, setPresets] = useState<Scenario[]>([]);
@@ -121,6 +130,13 @@ export function ChatPage() {
         ]);
         setConversations(chatData.conversations);
         setPresets(scenarioData.scenarios);
+        const nextLanguage =
+          settingsData.settings.targetLanguage || "Spanish";
+        const nextLevel = settingsData.settings.level || "Beginner";
+        setPreferredLanguage(nextLanguage);
+        setPreferredLevel(nextLevel);
+        setLanguage(nextLanguage);
+        setLevel(nextLevel);
         setShowEnglishUnderReplies(
           Boolean(settingsData.settings.showEnglishUnderReplies),
         );
@@ -143,7 +159,12 @@ export function ChatPage() {
     // If a correction marker just started mid-chunk, cut from there
     const openIdx = text.search(/<<<\s*CORRECTION\s*>>>/i);
     if (openIdx >= 0) text = text.slice(0, openIdx);
-    return text.replace(/^\s+/, "");
+    text = stripCorrectionArtifacts(text.replace(/^\s+/, ""));
+    return visibleDialogueContent(
+      text,
+      language,
+      showEnglishUnderReplies && supportsTranscript(language),
+    );
   }
 
   async function loadConversation(id: string) {
@@ -206,6 +227,9 @@ export function ChatPage() {
       setStatus("Session saved to memory");
       setActiveId(null);
       setMessages([]);
+      setLanguage(preferredLanguage);
+      setLevel(preferredLevel);
+      setSelectedScenarioId(null);
       const data = await listConversations();
       setConversations(data.conversations);
     } catch {
@@ -230,6 +254,9 @@ export function ChatPage() {
         setMessages([]);
         setStatus("Ready");
         setSessionSummary(null);
+        setLanguage(preferredLanguage);
+        setLevel(preferredLevel);
+        setSelectedScenarioId(null);
       }
       setConversations((prev) => prev.filter((item) => item._id !== id));
       setPendingDeleteId(null);
@@ -677,7 +704,9 @@ export function ChatPage() {
                     message.id === messages[messages.length - 1]?.id)
                 }
                 regenerating={sending && message.id === streamingId}
-                showEnglishUnderReplies={showEnglishUnderReplies}
+                showEnglishUnderReplies={
+                  showEnglishUnderReplies && supportsTranscript(language)
+                }
                 onRegenerate={
                   message.role === "assistant" && !sending
                     ? (id) => void handleRegenerate(id)
